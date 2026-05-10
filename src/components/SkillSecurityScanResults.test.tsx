@@ -121,7 +121,7 @@ describe("SecurityScanResults static guidance", () => {
     expect(screen.getByText("Can make purchases")).toBeTruthy();
   });
 
-  it("shows external-clearance guidance only for allowlisted static findings", () => {
+  it("hides advisory static findings from the public scan panel", () => {
     render(
       <SecurityScanResults
         vtAnalysis={{ status: "clean", checkedAt: Date.now() }}
@@ -139,10 +139,11 @@ describe("SecurityScanResults static guidance", () => {
       />,
     );
 
-    expect(screen.getByText("Confirmed safe by external scanners")).toBeTruthy();
+    expect(screen.queryByText("Static analysis")).toBeNull();
+    expect(screen.queryByText("Confirmed safe by external scanners")).toBeNull();
   });
 
-  it("keeps warning guidance for mixed static findings even when scanners are clean", () => {
+  it("keeps mixed advisory static findings hidden when scanners are clean", () => {
     render(
       <SecurityScanResults
         vtAnalysis={{ status: "clean", checkedAt: Date.now() }}
@@ -168,7 +169,8 @@ describe("SecurityScanResults static guidance", () => {
       />,
     );
 
-    expect(screen.getByText("Patterns worth reviewing")).toBeTruthy();
+    expect(screen.queryByText("Static analysis")).toBeNull();
+    expect(screen.queryByText("Patterns worth reviewing")).toBeNull();
     expect(screen.queryByText("Confirmed safe by external scanners")).toBeNull();
   });
 

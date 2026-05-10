@@ -39,13 +39,33 @@ describe("packageSecurity", () => {
     );
   });
 
-  it("treats suspicious static scans as suspicious even when verification is clean", () => {
+  it("does not let suspicious static scans override clean verification", () => {
     expect(
       resolvePackageReleaseScanStatus({
         staticScan: { status: "suspicious" },
         verification: { scanStatus: "clean" },
       } as never),
-    ).toBe("suspicious");
+    ).toBe("clean");
+  });
+
+  it("does not preserve old static-only suspicious verification", () => {
+    expect(
+      resolvePackageReleaseScanStatus({
+        staticScan: { status: "suspicious" },
+        verification: { scanStatus: "suspicious" },
+        sha256hash: "a".repeat(64),
+      } as never),
+    ).toBe("pending");
+  });
+
+  it("lets package ClawScan clear non-malicious scanner noise", () => {
+    expect(
+      resolvePackageReleaseScanStatus({
+        vtAnalysis: { status: "suspicious" },
+        llmAnalysis: { status: "completed", verdict: "benign" },
+        verification: { scanStatus: "suspicious" },
+      } as never),
+    ).toBe("clean");
   });
 
   it("lets manual package moderation approve or block releases", () => {

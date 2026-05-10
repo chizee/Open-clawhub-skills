@@ -1698,7 +1698,7 @@ describe("httpApiV1 handlers", () => {
     expect(json.version.security.virustotalUrl).toContain("virustotal.com/gui/file/");
   });
 
-  it("surfaces static-scan suspicious status in version security snapshot", async () => {
+  it("keeps static-scan suspicious status advisory in version security snapshot", async () => {
     const runQuery = vi.fn(async (_query: unknown, args: Record<string, unknown>) => {
       if ("slug" in args) {
         return {
@@ -1743,10 +1743,10 @@ describe("httpApiV1 handlers", () => {
     );
     expect(response.status).toBe(200);
     const json = await response.json();
-    expect(json.version.security.status).toBe("suspicious");
-    expect(json.version.security.hasWarnings).toBe(true);
+    expect(json.version.security.status).toBe("clean");
+    expect(json.version.security.hasWarnings).toBe(false);
     expect(json.version.security.hasScanResult).toBe(true);
-    expect(json.version.security.scanners.static.normalizedStatus).toBe("suspicious");
+    expect(json.version.security.scanners.static.normalizedStatus).toBe("pending");
     expect(json.version.security.scanners.vt.normalizedStatus).toBe("clean");
     expect(json.version.security.scanners.llm.normalizedStatus).toBe("clean");
   });
@@ -1803,7 +1803,7 @@ describe("httpApiV1 handlers", () => {
     expect(json.version.security.scanners.static.normalizedStatus).toBe("malicious");
   });
 
-  it("treats a static scan by itself as a definitive scan result", async () => {
+  it("does not treat a static scan by itself as a definitive scan result", async () => {
     const runQuery = vi.fn(async (_query: unknown, args: Record<string, unknown>) => {
       if ("slug" in args) {
         return {
@@ -1837,11 +1837,11 @@ describe("httpApiV1 handlers", () => {
     );
     expect(response.status).toBe(200);
     const json = await response.json();
-    expect(json.version.security.status).toBe("clean");
+    expect(json.version.security.status).toBe("pending");
     expect(json.version.security.hasWarnings).toBe(false);
-    expect(json.version.security.hasScanResult).toBe(true);
+    expect(json.version.security.hasScanResult).toBe(false);
     expect(json.version.security.virustotalUrl).toBeNull();
-    expect(json.version.security.scanners.static.normalizedStatus).toBe("clean");
+    expect(json.version.security.scanners.static.normalizedStatus).toBe("pending");
     expect(json.version.security.scanners.vt).toBeNull();
     expect(json.version.security.scanners.llm).toBeNull();
   });

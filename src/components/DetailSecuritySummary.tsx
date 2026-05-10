@@ -47,11 +47,6 @@ type DetailSecuritySummaryProps = {
   onRequestRescan?: (() => Promise<void>) | null;
 };
 
-function statusFromStaticScan(staticScan: DetailSecuritySummaryProps["staticScan"]) {
-  if (staticScan?.status) return staticScan.status;
-  return "pending";
-}
-
 function badgeVariantForScanStatus(status: string): BadgeProps["variant"] {
   const normalized = status.toLowerCase();
   if (normalized === "clean" || normalized === "benign") return "success";
@@ -108,7 +103,7 @@ export function DetailSecuritySummary({
   const llmStatus = suppressScanResults
     ? "cleared"
     : (llmAnalysis?.verdict ?? llmAnalysis?.status ?? "pending");
-  const staticStatus = suppressScanResults ? "cleared" : statusFromStaticScan(staticScan);
+  const showStaticBlock = staticScan?.status?.toLowerCase() === "malicious";
   const rescanButtonDisabledReason = rescanDisabledReason(rescanState);
   const isScanInProgress = Boolean(rescanState?.inProgressRequest);
   const rescanButtonLabel = isScanInProgress
@@ -155,11 +150,13 @@ export function DetailSecuritySummary({
           ) : null}
           <ScannerRow href={`${scannerBasePath}/virustotal`} label="VirusTotal" status={vtStatus} />
           <ScannerRow href={`${scannerBasePath}/openclaw`} label="ClawScan" status={llmStatus} />
-          <ScannerRow
-            href={`${scannerBasePath}/static-analysis`}
-            label="Static analysis"
-            status={staticStatus}
-          />
+          {showStaticBlock ? (
+            <ScannerRow
+              href={`${scannerBasePath}/static-analysis`}
+              label="Static analysis"
+              status="malicious"
+            />
+          ) : null}
         </div>
       </CardContent>
     </Card>

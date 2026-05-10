@@ -76,6 +76,9 @@ See also: [acceptable-usage.md](./acceptable-usage.md) for the marketplace polic
 ## Skill moderation pipeline
 
 - New skill publishes now persist a deterministic static scan result on the version.
+- Static suspicious findings are advisory evidence only. They no longer produce
+  an aggregate suspicious verdict or public package scan status without VT/LLM
+  corroboration. Static malicious findings still block immediately.
 - Package/plugin scan backfills now also recompute deterministic static scan results for older releases,
   so legacy plugin versions can surface OpenClaw scan findings without republishing.
 - ClawPack package releases keep static/LLM scan inputs intentionally metadata-only for now:

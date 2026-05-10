@@ -127,6 +127,8 @@ export function getScanStatusInfo(status: string) {
       return { label: "Malicious", className: "scan-status-malicious" };
     case "suspicious":
       return { label: "Review", className: "scan-status-suspicious" };
+    case "advisory":
+      return { label: "Advisory", className: "scan-status-unknown" };
     case "loading":
       return { label: "Loading...", className: "scan-status-pending" };
     case "pending":
@@ -528,8 +530,15 @@ export function SecurityScanResults({
   variant = "panel",
 }: SecurityScanResultsProps) {
   const visibleCapabilityTags = (capabilityTags ?? []).filter(Boolean);
-  const hasStaticFindings = staticFindings && staticFindings.length > 0;
-  if (!sha256hash && !llmAnalysis && !hasStaticFindings && visibleCapabilityTags.length === 0) {
+  const blockingStaticFindings =
+    staticFindings?.filter((finding) => finding.code.startsWith("malicious.")) ?? [];
+  const hasBlockingStaticFindings = blockingStaticFindings.length > 0;
+  if (
+    !sha256hash &&
+    !llmAnalysis &&
+    !hasBlockingStaticFindings &&
+    visibleCapabilityTags.length === 0
+  ) {
     return null;
   }
 
@@ -667,15 +676,16 @@ export function SecurityScanResults({
         llmAnalysis.summary ? (
           <LlmAnalysisDetail analysis={llmAnalysis} />
         ) : null}
-        {staticFindings && staticFindings.length > 0 ? (
+        {hasBlockingStaticFindings ? (
           <>
             {scannerBasePath ? (
               <div className="scan-result-row">
                 <div className="scan-result-scanner">
                   <span className="scan-result-scanner-name">Static analysis</span>
                 </div>
-                <div className="scan-result-status scan-status-suspicious">
-                  {staticFindings.length} finding{staticFindings.length === 1 ? "" : "s"}
+                <div className="scan-result-status scan-status-malicious">
+                  {blockingStaticFindings.length} blocking finding
+                  {blockingStaticFindings.length === 1 ? "" : "s"}
                 </div>
                 <a href={`${scannerBasePath}/static-analysis`} className="scan-result-link">
                   Details →
@@ -683,7 +693,7 @@ export function SecurityScanResults({
               </div>
             ) : null}
             <StaticAnalysisDetail
-              findings={staticFindings}
+              findings={blockingStaticFindings}
               vtStatus={vtStatus}
               llmStatus={llmVerdict}
             />

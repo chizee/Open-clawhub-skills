@@ -146,6 +146,7 @@ const internalRefs = internal as unknown as {
     publishPackageForUserInternal: unknown;
     insertAuditLogInternal: unknown;
     updateReleaseStaticScanInternal: unknown;
+    backfillLatestPackageScanStatusInternal: unknown;
   };
   packagePublishTokens: {
     createInternal: unknown;
@@ -362,7 +363,7 @@ function getPackageModerationQueueReasons(
   const reasons: string[] = [];
   if (release.manualModeration?.state) reasons.push(`manual:${release.manualModeration.state}`);
   if (scanStatus !== "clean" && scanStatus !== "not-run") reasons.push(`scan:${scanStatus}`);
-  if (release.staticScan?.status === "suspicious" || release.staticScan?.status === "malicious") {
+  if (release.staticScan?.status === "malicious") {
     reasons.push(`static:${release.staticScan.status}`);
   }
   if (release.vtAnalysis?.status === "suspicious" || release.vtAnalysis?.status === "malicious") {
@@ -4692,7 +4693,9 @@ export const insertReleaseInternal = internalMutation({
     };
   },
 });
-function isReleaseActive(release: Doc<"packageReleases"> | null | undefined) {
+function isReleaseActive(
+  release: Doc<"packageReleases"> | null | undefined,
+): release is Doc<"packageReleases"> {
   return Boolean(release && !release.softDeletedAt);
 }
 
@@ -4798,10 +4801,89 @@ export const updateReleaseLlmAnalysisInternal = internalMutation({
     if (!isReleaseActive(release)) return;
     const updatedRelease = { ...release, llmAnalysis: args.llmAnalysis };
     await ctx.db.patch(args.releaseId, { llmAnalysis: args.llmAnalysis });
+    await syncLatestPackageVerification(ctx, updatedRelease);
     await finalizeInProgressRescanRequestsForTarget(
       ctx,
       { kind: "plugin", artifactId: args.releaseId },
       updatedRelease,
+    );
+  },
+});
+
+export const backfillLatestPackageScanStatusInternal = internalMutation({
+  args: {
+    cursor: v.optional(v.string()),
+    batchSize: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const batchSize = Math.max(10, Math.min(args.batchSize ?? 100, 200));
+    const { page, continueCursor, isDone } = await ctx.db
+      .query("packages")
+      .paginate({ cursor: args.cursor ?? null, numItems: batchSize });
+
+    let patched = 0;
+    for (const pkg of page) {
+      if (!pkg.latestReleaseId) continue;
+      const release = await ctx.db.get(pkg.latestReleaseId);
+      if (!isReleaseActive(release)) continue;
+
+      const scanStatus = resolvePackageReleaseScanStatus(release);
+      const releaseVerification = release.verification
+        ? { ...release.verification, scanStatus }
+        : release.verification;
+      if (release.verification?.scanStatus !== releaseVerification?.scanStatus) {
+        await ctx.db.patch(release._id, { verification: releaseVerification });
+      }
+
+      const nextVerification = pkg.verification
+        ? { ...pkg.verification, scanStatus }
+        : pkg.latestVersionSummary?.verification
+          ? { ...pkg.latestVersionSummary.verification, scanStatus }
+          : undefined;
+      const nextLatestVersionSummary = pkg.latestVersionSummary
+        ? {
+            ...pkg.latestVersionSummary,
+            verification: nextVerification,
+          }
+        : pkg.latestVersionSummary;
+
+      if (
+        pkg.scanStatus !== scanStatus ||
+        pkg.verification?.scanStatus !== nextVerification?.scanStatus ||
+        pkg.latestVersionSummary?.verification?.scanStatus !==
+          nextLatestVersionSummary?.verification?.scanStatus
+      ) {
+        await ctx.db.patch(pkg._id, {
+          verification: nextVerification,
+          scanStatus,
+          latestVersionSummary: nextLatestVersionSummary,
+        });
+        patched++;
+      }
+    }
+
+    if (!isDone) {
+      await ctx.scheduler.runAfter(0, internal.packages.backfillLatestPackageScanStatusInternal, {
+        cursor: continueCursor,
+        batchSize: args.batchSize,
+      });
+    }
+
+    return { patched, isDone, scanned: page.length };
+  },
+});
+
+export const backfillLatestPackageScanStatus = action({
+  args: {
+    batchSize: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    return await runMutationRef(
+      ctx,
+      internalRefs.packages.backfillLatestPackageScanStatusInternal,
+      {
+        batchSize: args.batchSize,
+      },
     );
   },
 });

@@ -4,17 +4,20 @@ export type PackageScanStatus = Doc<"packages">["scanStatus"];
 
 type PackageReleaseSecurityLike = Pick<
   Doc<"packageReleases">,
-  "sha256hash" | "vtAnalysis" | "verification" | "staticScan" | "manualModeration"
+  "sha256hash" | "vtAnalysis" | "llmAnalysis" | "verification" | "staticScan" | "manualModeration"
 >;
 
 export function normalizePackageScanStatus(status: string | null | undefined): PackageScanStatus {
-  switch (status?.trim().toLowerCase()) {
+  const normalized = status?.trim().toLowerCase();
+  switch (normalized) {
+    case "benign":
+      return "clean";
     case "clean":
     case "suspicious":
     case "malicious":
     case "pending":
     case "not-run":
-      return status.trim().toLowerCase() as PackageScanStatus;
+      return normalized as PackageScanStatus;
     default:
       return undefined;
   }
@@ -33,21 +36,34 @@ export function resolvePackageReleaseScanStatus(
 
   const staticStatus = normalizePackageScanStatus(release.staticScan?.status);
   if (staticStatus === "malicious") return "malicious";
-  if (staticStatus === "suspicious") return "suspicious";
 
   const vtStatus = normalizePackageScanStatus(release.vtAnalysis?.status);
   if (vtStatus === "malicious") return "malicious";
+
+  const llmStatus = normalizePackageScanStatus(
+    release.llmAnalysis?.verdict ?? release.llmAnalysis?.status,
+  );
+  if (llmStatus === "malicious") return "malicious";
+  if (llmStatus === "suspicious") return "suspicious";
+  if (llmStatus === "clean") return "clean";
+
   if (vtStatus === "suspicious") return "suspicious";
 
   const verificationStatus = normalizePackageScanStatus(release.verification?.scanStatus);
-  if (verificationStatus === "malicious") return "malicious";
-  if (verificationStatus === "suspicious") return "suspicious";
+  const effectiveVerificationStatus =
+    verificationStatus === "suspicious" && staticStatus === "suspicious"
+      ? undefined
+      : verificationStatus;
+  if (effectiveVerificationStatus === "malicious") return "malicious";
+  if (effectiveVerificationStatus === "suspicious") return "suspicious";
 
   if (vtStatus) return vtStatus;
-  if (verificationStatus && verificationStatus !== "not-run") return verificationStatus;
+  if (effectiveVerificationStatus && effectiveVerificationStatus !== "not-run") {
+    return effectiveVerificationStatus;
+  }
   if (release.sha256hash) return "pending";
 
-  return verificationStatus ?? "not-run";
+  return effectiveVerificationStatus ?? "not-run";
 }
 
 export function isPackageBlockedFromPublic(scanStatus: PackageScanStatus) {

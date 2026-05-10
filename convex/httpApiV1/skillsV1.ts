@@ -336,7 +336,10 @@ function buildSkillSecuritySnapshot(
 
   if (!sha256hash && !vt && !llm && !staticScan && capabilityTags.length === 0) return null;
 
-  const staticStatus = staticScan ? normalizeSecurityStatus(staticScan.status) : null;
+  const staticStatus =
+    staticScan?.status?.trim().toLowerCase() === "malicious"
+      ? ("malicious" satisfies NormalizedSecurityStatus)
+      : null;
   const vtStatus = vt ? normalizeSecurityStatus(vt.verdict ?? vt.status) : null;
   const llmStatus = llm ? normalizeSecurityStatus(llm.verdict ?? llm.status) : null;
 

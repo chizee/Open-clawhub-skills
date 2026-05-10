@@ -425,7 +425,7 @@ function packageDashboardStatus(pkg: DashboardPackage): {
   const releaseStatuses = new Set([
     pkg.latestRelease?.vtStatus,
     pkg.latestRelease?.llmStatus,
-    pkg.latestRelease?.staticScanStatus,
+    pkg.latestRelease?.staticScanStatus === "malicious" ? "malicious" : null,
   ]);
   if (pkg.scanStatus === "malicious" || releaseStatuses.has("malicious")) {
     return {
@@ -626,7 +626,7 @@ function skillDashboardStatus(skill: DashboardSkill): {
   const versionStatuses = new Set([
     skill.latestVersion?.vtStatus,
     skill.latestVersion?.llmStatus,
-    skill.latestVersion?.staticScanStatus,
+    skill.latestVersion?.staticScanStatus === "malicious" ? "malicious" : null,
   ]);
   if (skill.moderationStatus === "removed") {
     return {

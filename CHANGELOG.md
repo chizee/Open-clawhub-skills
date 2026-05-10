@@ -14,6 +14,7 @@
 
 ### Fixes
 
+- Moderation: stop treating static suspicious-only findings as a verdict; keep file/line evidence for review while VT/LLM decide public suspicious status.
 - Web: keep the Publishers directory responsive for high-volume publishers by using bounded published-item previews, and abort stale unified-search plugin requests during route changes.
 - ClawScan: include package `openclaw.environment` env/config declarations in package review prompts so declared plugin runtime requirements are not reported as missing (#2013).
 - Uploads: accept PowerShell `.ps1`, `.psm1`, and `.psd1` files as text-based skill files while keeping normal scan coverage (#897) (thanks @cute-omega).

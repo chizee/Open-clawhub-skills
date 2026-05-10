@@ -1942,10 +1942,7 @@ describe("skills anti-spam guards", () => {
         moderationReason: "scanner.vt.malicious",
         moderationFlags: ["blocked.malware"],
         moderationVerdict: "malicious",
-        moderationReasonCodes: expect.arrayContaining([
-          "malicious.vt_malicious",
-          "suspicious.dynamic_code_execution",
-        ]),
+        moderationReasonCodes: ["malicious.vt_malicious"],
         moderationSourceVersionId: "skillVersions:1",
       }),
     );

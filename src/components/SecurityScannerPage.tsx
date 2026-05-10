@@ -57,7 +57,8 @@ const SCANNER_LABELS: Record<ScannerSlug, string> = {
 const SCANNER_SUMMARIES: Record<ScannerSlug, string> = {
   virustotal: "External malware reputation and Code Insight signals for this exact artifact hash.",
   openclaw: "ClawHub's context-aware review of the artifact, metadata, and declared behavior.",
-  "static-analysis": "Deterministic local checks for risky code patterns and metadata mismatches.",
+  "static-analysis":
+    "Advisory deterministic evidence for risky code patterns and metadata mismatches.",
 };
 
 function formatTime(value?: number | null) {
@@ -111,7 +112,8 @@ function getScannerStatus(props: SecurityScannerPageProps) {
     return props.vtAnalysis?.verdict ?? props.vtAnalysis?.status ?? "pending";
   if (props.scanner === "openclaw")
     return props.llmAnalysis?.verdict ?? props.llmAnalysis?.status ?? "pending";
-  return props.staticScan?.status ?? "pending";
+  if (props.staticScan?.status?.toLowerCase() === "malicious") return "malicious";
+  return props.staticScan ? "advisory" : "pending";
 }
 
 function getCheckedAt(props: SecurityScannerPageProps) {
@@ -295,7 +297,9 @@ export function SecurityScannerPage(props: SecurityScannerPageProps) {
           <div className="flex min-w-0 flex-col gap-5">
             <Card>
               <CardHeader>
-                <CardTitle>Scanner verdict</CardTitle>
+                <CardTitle>
+                  {props.scanner === "static-analysis" ? "Scanner evidence" : "Scanner verdict"}
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="flex flex-wrap items-center gap-2">

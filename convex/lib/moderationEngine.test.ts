@@ -1863,7 +1863,7 @@ describe("moderationEngine", () => {
     expect(snapshot.reasonCodes).toEqual([]);
   });
 
-  it("demotes static suspicious findings when VT and LLM both report clean", () => {
+  it("keeps static suspicious findings as evidence while VT and LLM decide the verdict", () => {
     const snapshot = buildModerationSnapshot({
       staticScan: {
         status: "suspicious",
@@ -1891,7 +1891,7 @@ describe("moderationEngine", () => {
     expect(snapshot.evidence.length).toBe(1);
   });
 
-  it("keeps non-allowlisted suspicious findings when VT and LLM both report clean", () => {
+  it("does not let static suspicious findings alone drive the aggregate verdict", () => {
     const snapshot = buildModerationSnapshot({
       staticScan: {
         status: "suspicious",
@@ -1914,8 +1914,9 @@ describe("moderationEngine", () => {
       llmStatus: "clean",
     });
 
-    expect(snapshot.verdict).toBe("suspicious");
-    expect(snapshot.reasonCodes).toEqual(["suspicious.potential_exfiltration"]);
+    expect(snapshot.verdict).toBe("clean");
+    expect(snapshot.reasonCodes).toEqual([]);
+    expect(snapshot.evidence.length).toBe(1);
   });
 
   it("preserves static malicious findings even when VT and LLM are clean", () => {
@@ -1934,10 +1935,11 @@ describe("moderationEngine", () => {
 
     expect(snapshot.verdict).toBe("malicious");
     expect(snapshot.reasonCodes).toContain("malicious.crypto_mining");
-    expect(snapshot.reasonCodes).toContain("suspicious.dynamic_code_execution");
+    expect(snapshot.reasonCodes).not.toContain("suspicious.dynamic_code_execution");
+    expect(snapshot.evidence).toEqual([]);
   });
 
-  it("keeps static suspicious findings when only one external scanner is clean", () => {
+  it("keeps review pending clean when only one external scanner is clean", () => {
     const snapshot = buildModerationSnapshot({
       staticScan: {
         status: "suspicious",
@@ -1950,11 +1952,11 @@ describe("moderationEngine", () => {
       vtStatus: "clean",
     });
 
-    expect(snapshot.verdict).toBe("suspicious");
-    expect(snapshot.reasonCodes).toContain("suspicious.env_credential_access");
+    expect(snapshot.verdict).toBe("clean");
+    expect(snapshot.reasonCodes).toEqual([]);
   });
 
-  it("keeps static suspicious findings when VT is suspicious", () => {
+  it("uses VT suspicious without adding static suspicious noise", () => {
     const snapshot = buildModerationSnapshot({
       staticScan: {
         status: "suspicious",
@@ -1969,7 +1971,7 @@ describe("moderationEngine", () => {
     });
 
     expect(snapshot.verdict).toBe("suspicious");
-    expect(snapshot.reasonCodes).toContain("suspicious.env_credential_access");
+    expect(snapshot.reasonCodes).not.toContain("suspicious.env_credential_access");
     expect(snapshot.reasonCodes).toContain("suspicious.vt_suspicious");
   });
 

@@ -229,9 +229,7 @@ describe("plugin detail route", () => {
     expect(screen.getByRole("link", { name: /VirusTotal.*Benign/i }).getAttribute("href")).toBe(
       "/plugins/demo-plugin/security/virustotal",
     );
-    expect(
-      screen.getByRole("link", { name: /Static analysis.*Benign/i }).getAttribute("href"),
-    ).toBe("/plugins/demo-plugin/security/static-analysis");
+    expect(screen.queryByRole("link", { name: /Static analysis/i })).toBeNull();
 
     const securityHeading = screen.getByText("Security Scans");
     const installHeading = screen.getByRole("heading", { name: "Install" });
