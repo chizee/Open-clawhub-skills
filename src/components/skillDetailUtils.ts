@@ -231,7 +231,11 @@ export function formatOpenClawPrompt({
     requiredEnvVars.add(name);
   }
 
-  const lines = [`Install the skill "${displayName}" (${target}) from ClawHub.`];
+  const lines = [
+    "Before installing anything, inspect the ClawHub skill metadata and setup requirements.",
+    "If the skill asks you to install a third-party package or CLI, verify its source, maintainer, and package contents before running the install command.",
+    `Install the skill "${displayName}" (${target}) from ClawHub only after those checks pass.`,
+  ];
 
   if (pageUrl) {
     lines.push(`Skill page: ${pageUrl}`);
@@ -244,7 +248,7 @@ export function formatOpenClawPrompt({
     return lines.join("\n");
   }
 
-  lines.push("After install, inspect the skill metadata and help me finish setup.");
+  lines.push("After install, help me finish setup from verified skill metadata.");
 
   if (requiredEnvVars.size > 0) {
     lines.push(`Required env vars: ${Array.from(requiredEnvVars).join(", ")}`);
