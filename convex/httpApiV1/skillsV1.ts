@@ -496,7 +496,8 @@ type SkillListSort =
 
 type PublicListSort = "newest" | "updated" | "downloads" | "stars" | "installs";
 
-function parseListSort(value: string | null): SkillListSort {
+function parseListSort(value: string | null): SkillListSort | null {
+  if (value === null) return "updated";
   const normalized = value?.trim().toLowerCase();
   if (normalized === "createdat" || normalized === "created-at" || normalized === "newest") {
     return "createdAt";
@@ -515,7 +516,8 @@ function parseListSort(value: string | null): SkillListSort {
     return "installsAllTime";
   }
   if (normalized === "trending") return "trending";
-  return "updated";
+  if (normalized === "updated") return "updated";
+  return null;
 }
 
 function toPublicListSort(sort: Exclude<SkillListSort, "trending">): PublicListSort {
@@ -533,6 +535,7 @@ export async function listSkillsV1Handler(ctx: ActionCtx, request: Request) {
   const limit = toOptionalNumber(url.searchParams.get("limit"));
   const rawCursor = url.searchParams.get("cursor")?.trim() || undefined;
   const sort = parseListSort(url.searchParams.get("sort"));
+  if (!sort) return text("Invalid sort query parameter", 400, rate.headers);
   const cursor = sort === "trending" ? undefined : rawCursor;
   const nonSuspiciousOnly = resolveBooleanQueryParam(
     url.searchParams.get("nonSuspiciousOnly"),

@@ -517,11 +517,17 @@ export default function Header() {
                     void signIn(
                       "github",
                       signInRedirectTo ? { redirectTo: signInRedirectTo } : undefined,
-                    ).catch((error) => {
-                      setAuthError(
-                        getUserFacingAuthError(error, "Sign in failed. Please try again."),
-                      );
-                    });
+                    )
+                      .then((result) => {
+                        if (result?.signingIn === false) {
+                          setAuthError("Sign in failed. Please try again.");
+                        }
+                      })
+                      .catch((error) => {
+                        setAuthError(
+                          getUserFacingAuthError(error, "Sign in failed. Please try again."),
+                        );
+                      });
                   }}
                 >
                   <GitHubLogo className="github-sign-in-logo" />

@@ -23,8 +23,14 @@
           "displayName": { "type": ["string", "null"] },
           "summary": { "type": ["string", "null"] },
           "version": { "type": ["string", "null"] },
-          "updatedAt": { "type": ["number", "null"] }
+          "updatedAt": { "type": ["number", "null"] },
+          "ownerHandle": { "type": ["string", "null"] },
+          "owner": { "$ref": "#/components/schemas/Owner" }
         }
+      },
+      "PlainTextError": {
+        "type": "string",
+        "description": "Human-readable plain text error response."
       },
       "SearchResponse": {
         "type": "object",
@@ -324,7 +330,8 @@
         ],
         "responses": {
           "200": { "description": "Resolved", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ResolveResponse" } } } },
-          "404": { "description": "Not found" }
+          "400": { "description": "Invalid request", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/PlainTextError" } } } },
+          "404": { "description": "Not found", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/PlainTextError" } } } }
         }
       }
     },
@@ -334,11 +341,13 @@
         "parameters": [
           { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } },
           { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Pagination cursor for any non-trending sort." },
+          { "name": "sort", "in": "query", "required": false, "schema": { "type": "string", "enum": ["updated", "createdAt", "newest", "downloads", "stars", "rating", "installsCurrent", "installs", "installsAllTime", "trending"] } },
           { "name": "nonSuspiciousOnly", "in": "query", "required": false, "schema": { "type": "boolean" }, "description": "Hide suspicious skills. For cursor-based sorts, pages may contain fewer than limit items because filtering happens after page retrieval." },
           { "name": "nonSuspicious", "in": "query", "required": false, "schema": { "type": "boolean" }, "description": "Legacy alias for nonSuspiciousOnly." }
         ],
         "responses": {
-          "200": { "description": "Skills", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SkillListResponse" } } } }
+          "200": { "description": "Skills", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SkillListResponse" } } } },
+          "400": { "description": "Invalid request", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/PlainTextError" } } } }
         }
       },
       "post": {
@@ -402,7 +411,7 @@
         ],
         "responses": {
           "200": { "description": "Skill", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SkillResponse" } } } },
-          "404": { "description": "Not found" }
+          "404": { "description": "Not found", "content": { "text/plain": { "schema": { "$ref": "#/components/schemas/PlainTextError" } } } }
         }
       },
       "delete": {

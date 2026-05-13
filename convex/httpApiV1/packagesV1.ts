@@ -168,9 +168,33 @@ function normalizeCapabilityTagSegment(value: string) {
     .replace(/^-+|-+$/g, "");
 }
 
-function getEnabledQueryFlag(params: URLSearchParams, name: string) {
-  const value = params.get(name)?.trim().toLowerCase();
-  return value === "true" || value === "1";
+const PACKAGE_FAMILY_VALUES = ["skill", "code-plugin", "bundle-plugin"] as const;
+const PACKAGE_CHANNEL_VALUES = ["official", "community", "private"] as const;
+
+function invalidQueryParamMessage(name: string) {
+  return `Invalid ${name} query parameter`;
+}
+
+function parseEnumQueryParam<const T extends readonly string[]>(
+  params: URLSearchParams,
+  name: string,
+  allowed: T,
+): { ok: true; value: T[number] | undefined } | { ok: false; message: string } {
+  if (!params.has(name)) return { ok: true, value: undefined };
+  const value = params.get(name)?.trim() ?? "";
+  if ((allowed as readonly string[]).includes(value)) return { ok: true, value };
+  return { ok: false, message: invalidQueryParamMessage(name) };
+}
+
+function parseBooleanQueryParam(
+  params: URLSearchParams,
+  name: string,
+): { ok: true; value: boolean | undefined } | { ok: false; message: string } {
+  if (!params.has(name)) return { ok: true, value: undefined };
+  const value = params.get(name)?.trim().toLowerCase() ?? "";
+  if (value === "true" || value === "1") return { ok: true, value: true };
+  if (value === "false" || value === "0") return { ok: true, value: false };
+  return { ok: false, message: invalidQueryParamMessage(name) };
 }
 
 function getCapabilityTagFromQueryParams(params: URLSearchParams) {
@@ -202,17 +226,36 @@ function getCapabilityTagFromQueryParams(params: URLSearchParams) {
   if (artifactKind === "legacy-zip" || artifactKind === "npm-pack") {
     return `artifact:${artifactKind}`;
   }
-  if (getEnabledQueryFlag(params, "npmMirror")) return "npm-mirror:available";
-  if (getEnabledQueryFlag(params, "requiresBrowser")) return "requires:browser";
-  if (getEnabledQueryFlag(params, "requiresDesktop")) return "requires:desktop";
-  if (getEnabledQueryFlag(params, "requiresNativeDeps")) return "requires:native-deps";
-  if (getEnabledQueryFlag(params, "nativeDeps")) return "requires:native-deps";
-  if (getEnabledQueryFlag(params, "requiresExternalService")) {
+  if (params.has("artifactKind")) return { error: invalidQueryParamMessage("artifactKind") };
+  const npmMirror = parseBooleanQueryParam(params, "npmMirror");
+  if (!npmMirror.ok) return { error: npmMirror.message };
+  if (npmMirror.value) return "npm-mirror:available";
+  const requiresBrowser = parseBooleanQueryParam(params, "requiresBrowser");
+  if (!requiresBrowser.ok) return { error: requiresBrowser.message };
+  if (requiresBrowser.value) return "requires:browser";
+  const requiresDesktop = parseBooleanQueryParam(params, "requiresDesktop");
+  if (!requiresDesktop.ok) return { error: requiresDesktop.message };
+  if (requiresDesktop.value) return "requires:desktop";
+  const requiresNativeDeps = parseBooleanQueryParam(params, "requiresNativeDeps");
+  if (!requiresNativeDeps.ok) return { error: requiresNativeDeps.message };
+  if (requiresNativeDeps.value) return "requires:native-deps";
+  const nativeDeps = parseBooleanQueryParam(params, "nativeDeps");
+  if (!nativeDeps.ok) return { error: nativeDeps.message };
+  if (nativeDeps.value) return "requires:native-deps";
+  const requiresExternalService = parseBooleanQueryParam(params, "requiresExternalService");
+  if (!requiresExternalService.ok) return { error: requiresExternalService.message };
+  if (requiresExternalService.value) {
     return "requires:external-service";
   }
-  if (getEnabledQueryFlag(params, "requiresBinary")) return "requires:binary";
-  if (getEnabledQueryFlag(params, "requiresOsPermission")) return "requires:os-permission";
-  if (getEnabledQueryFlag(params, "environmentDeclared")) return "environment:declared";
+  const requiresBinary = parseBooleanQueryParam(params, "requiresBinary");
+  if (!requiresBinary.ok) return { error: requiresBinary.message };
+  if (requiresBinary.value) return "requires:binary";
+  const requiresOsPermission = parseBooleanQueryParam(params, "requiresOsPermission");
+  if (!requiresOsPermission.ok) return { error: requiresOsPermission.message };
+  if (requiresOsPermission.value) return "requires:os-permission";
+  const environmentDeclared = parseBooleanQueryParam(params, "environmentDeclared");
+  if (!environmentDeclared.ok) return { error: environmentDeclared.message };
+  if (environmentDeclared.value) return "environment:declared";
   return undefined;
 }
 
@@ -1107,30 +1150,23 @@ async function listPackages(
   const viewerUserId = await getOptionalViewerUserIdForRequest(ctx, request);
   const limit = Math.max(1, Math.min(toOptionalNumber(url.searchParams.get("limit")) ?? 25, 100));
   const cursor = url.searchParams.get("cursor");
-  const familyRaw = url.searchParams.get("family");
-  const channelRaw = url.searchParams.get("channel")?.trim();
   const capabilityTag = getCapabilityTagFromQueryParams(url.searchParams);
-  const isOfficialRaw = url.searchParams.get("isOfficial");
-  const highlightedOnly =
-    url.searchParams.get("featured") === "true" ||
-    url.searchParams.get("featured") === "1" ||
-    url.searchParams.get("highlightedOnly") === "true" ||
-    url.searchParams.get("highlightedOnly") === "1";
-  const executesCodeRaw = url.searchParams.get("executesCode");
-  const effectiveFamily =
-    family ??
-    (familyRaw === "skill" || familyRaw === "code-plugin" || familyRaw === "bundle-plugin"
-      ? familyRaw
-      : undefined);
+  if (typeof capabilityTag === "object") return text(capabilityTag.error, 400, rate.headers);
+  const familyParam = parseEnumQueryParam(url.searchParams, "family", PACKAGE_FAMILY_VALUES);
+  if (!familyParam.ok) return text(familyParam.message, 400, rate.headers);
+  const channelParam = parseEnumQueryParam(url.searchParams, "channel", PACKAGE_CHANNEL_VALUES);
+  if (!channelParam.ok) return text(channelParam.message, 400, rate.headers);
+  const isOfficial = parseBooleanQueryParam(url.searchParams, "isOfficial");
+  if (!isOfficial.ok) return text(isOfficial.message, 400, rate.headers);
+  const featured = parseBooleanQueryParam(url.searchParams, "featured");
+  if (!featured.ok) return text(featured.message, 400, rate.headers);
+  const highlightedOnlyParam = parseBooleanQueryParam(url.searchParams, "highlightedOnly");
+  if (!highlightedOnlyParam.ok) return text(highlightedOnlyParam.message, 400, rate.headers);
+  const executesCode = parseBooleanQueryParam(url.searchParams, "executesCode");
+  if (!executesCode.ok) return text(executesCode.message, 400, rate.headers);
+  const effectiveFamily = family ?? familyParam.value;
   const includeSkills = options?.includeSkills ?? effectiveFamily === undefined;
-  const channel =
-    channelRaw === "official" || channelRaw === "community" || channelRaw === "private"
-      ? channelRaw
-      : undefined;
-  const isOfficial =
-    isOfficialRaw === "true" ? true : isOfficialRaw === "false" ? false : undefined;
-  const executesCode =
-    executesCodeRaw === "true" ? true : executesCodeRaw === "false" ? false : undefined;
+  const highlightedOnly = featured.value === true || highlightedOnlyParam.value === true;
 
   if (effectiveFamily === "skill") {
     const result = await runQueryRef<{
@@ -1138,10 +1174,10 @@ async function listPackages(
       isDone: boolean;
       continueCursor: string | null;
     }>(ctx, apiRefs.skills.listPackageCatalogPage, {
-      channel,
-      isOfficial,
+      channel: channelParam.value,
+      isOfficial: isOfficial.value,
       highlightedOnly: highlightedOnly || undefined,
-      executesCode,
+      executesCode: executesCode.value,
       capabilityTag,
       paginationOpts: { cursor, numItems: limit },
     });
@@ -1166,10 +1202,10 @@ async function listPackages(
             isDone: boolean;
             continueCursor: string | null;
           }>(ctx, internalRefs.packages.listPageForViewerInternal, {
-            channel,
-            isOfficial,
+            channel: channelParam.value,
+            isOfficial: isOfficial.value,
             highlightedOnly: highlightedOnly || undefined,
-            executesCode,
+            executesCode: executesCode.value,
             capabilityTag,
             viewerUserId: viewerUserId ?? undefined,
             paginationOpts: { cursor: pageCursor, numItems },
@@ -1186,10 +1222,10 @@ async function listPackages(
             isDone: boolean;
             continueCursor: string | null;
           }>(ctx, apiRefs.skills.listPackageCatalogPage, {
-            channel,
-            isOfficial,
+            channel: channelParam.value,
+            isOfficial: isOfficial.value,
             highlightedOnly: highlightedOnly || undefined,
-            executesCode,
+            executesCode: executesCode.value,
             capabilityTag,
             paginationOpts: { cursor: pageCursor, numItems },
           });
@@ -1250,10 +1286,10 @@ async function listPackages(
         continueCursor: string | null;
       }>(ctx, internalRefs.packages.listPageForViewerInternal, {
         family: pluginFamily,
-        channel,
-        isOfficial,
+        channel: channelParam.value,
+        isOfficial: isOfficial.value,
         highlightedOnly: highlightedOnly || undefined,
-        executesCode,
+        executesCode: executesCode.value,
         capabilityTag,
         viewerUserId: viewerUserId ?? undefined,
         paginationOpts: { cursor: pageCursor, numItems },
@@ -1318,10 +1354,10 @@ async function listPackages(
     continueCursor: string | null;
   }>(ctx, internalRefs.packages.listPageForViewerInternal, {
     family: effectiveFamily,
-    channel,
-    isOfficial,
+    channel: channelParam.value,
+    isOfficial: isOfficial.value,
     highlightedOnly: highlightedOnly || undefined,
-    executesCode,
+    executesCode: executesCode.value,
     capabilityTag,
     viewerUserId: viewerUserId ?? undefined,
     paginationOpts: { cursor, numItems: limit },
@@ -2039,29 +2075,23 @@ async function searchPackages(
   const queryText = url.searchParams.get("q")?.trim() ?? "";
   if (!queryText) return text("Missing q query parameter", 400, rate.headers);
   const limit = Math.max(1, Math.min(toOptionalNumber(url.searchParams.get("limit")) ?? 20, 100));
-  const familyRaw = url.searchParams.get("family");
-  const channelRaw = url.searchParams.get("channel");
-  const isOfficialRaw = url.searchParams.get("isOfficial");
-  const highlightedOnly =
-    url.searchParams.get("featured") === "true" ||
-    url.searchParams.get("featured") === "1" ||
-    url.searchParams.get("highlightedOnly") === "true" ||
-    url.searchParams.get("highlightedOnly") === "1";
-  const executesCodeRaw = url.searchParams.get("executesCode");
   const capabilityTag = getCapabilityTagFromQueryParams(url.searchParams);
-  const family =
-    familyRaw === "skill" || familyRaw === "code-plugin" || familyRaw === "bundle-plugin"
-      ? familyRaw
-      : undefined;
+  if (typeof capabilityTag === "object") return text(capabilityTag.error, 400, rate.headers);
+  const familyParam = parseEnumQueryParam(url.searchParams, "family", PACKAGE_FAMILY_VALUES);
+  if (!familyParam.ok) return text(familyParam.message, 400, rate.headers);
+  const channelParam = parseEnumQueryParam(url.searchParams, "channel", PACKAGE_CHANNEL_VALUES);
+  if (!channelParam.ok) return text(channelParam.message, 400, rate.headers);
+  const isOfficial = parseBooleanQueryParam(url.searchParams, "isOfficial");
+  if (!isOfficial.ok) return text(isOfficial.message, 400, rate.headers);
+  const featured = parseBooleanQueryParam(url.searchParams, "featured");
+  if (!featured.ok) return text(featured.message, 400, rate.headers);
+  const highlightedOnlyParam = parseBooleanQueryParam(url.searchParams, "highlightedOnly");
+  if (!highlightedOnlyParam.ok) return text(highlightedOnlyParam.message, 400, rate.headers);
+  const executesCode = parseBooleanQueryParam(url.searchParams, "executesCode");
+  if (!executesCode.ok) return text(executesCode.message, 400, rate.headers);
+  const highlightedOnly = featured.value === true || highlightedOnlyParam.value === true;
+  const family = familyParam.value;
   const includeSkills = options?.includeSkills ?? family === undefined;
-  const channel =
-    channelRaw === "official" || channelRaw === "community" || channelRaw === "private"
-      ? channelRaw
-      : undefined;
-  const isOfficial =
-    isOfficialRaw === "true" ? true : isOfficialRaw === "false" ? false : undefined;
-  const executesCode =
-    executesCodeRaw === "true" ? true : executesCodeRaw === "false" ? false : undefined;
 
   let results: CatalogSearchEntry[];
   if (family === "skill") {
@@ -2071,10 +2101,10 @@ async function searchPackages(
       {
         query: queryText,
         limit,
-        channel,
-        isOfficial,
+        channel: channelParam.value,
+        isOfficial: isOfficial.value,
         highlightedOnly: highlightedOnly || undefined,
-        executesCode,
+        executesCode: executesCode.value,
         capabilityTag,
       },
     );
@@ -2086,10 +2116,10 @@ async function searchPackages(
             query: queryText,
             limit,
             family: pluginFamily,
-            channel,
-            isOfficial,
+            channel: channelParam.value,
+            isOfficial: isOfficial.value,
             highlightedOnly: highlightedOnly || undefined,
-            executesCode,
+            executesCode: executesCode.value,
             capabilityTag,
             viewerUserId: viewerUserId ?? undefined,
           }),
@@ -2111,10 +2141,10 @@ async function searchPackages(
         query: queryText,
         limit,
         family,
-        channel,
-        isOfficial,
+        channel: channelParam.value,
+        isOfficial: isOfficial.value,
         highlightedOnly: highlightedOnly || undefined,
-        executesCode,
+        executesCode: executesCode.value,
         capabilityTag,
         viewerUserId: viewerUserId ?? undefined,
       });
@@ -2124,20 +2154,20 @@ async function searchPackages(
       searchPackageCatalog(ctx, {
         query: queryText,
         limit,
-        channel,
-        isOfficial,
+        channel: channelParam.value,
+        isOfficial: isOfficial.value,
         highlightedOnly: highlightedOnly || undefined,
-        executesCode,
+        executesCode: executesCode.value,
         capabilityTag,
         viewerUserId: viewerUserId ?? undefined,
       }),
       runQueryRef<CatalogSearchEntry[]>(ctx, apiRefs.skills.searchPackageCatalogPublic, {
         query: queryText,
         limit,
-        channel,
-        isOfficial,
+        channel: channelParam.value,
+        isOfficial: isOfficial.value,
         highlightedOnly: highlightedOnly || undefined,
-        executesCode,
+        executesCode: executesCode.value,
         capabilityTag,
       }),
     ]);

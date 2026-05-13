@@ -2,7 +2,7 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,7 +14,8 @@ type HeaderAuthStatus = {
 
 const siteModeMock = vi.fn(() => "souls");
 const navigateMock = vi.fn();
-const { useUnifiedSearchMock } = vi.hoisted(() => ({
+const { signInMock, useUnifiedSearchMock } = vi.hoisted(() => ({
+  signInMock: vi.fn(),
   useUnifiedSearchMock: vi.fn(),
 }));
 
@@ -73,7 +74,7 @@ vi.mock("@tanstack/react-router", () => ({
 
 vi.mock("@convex-dev/auth/react", () => ({
   useAuthActions: () => ({
-    signIn: vi.fn(),
+    signIn: signInMock,
     signOut: vi.fn(),
   }),
 }));
@@ -201,6 +202,8 @@ describe("Header", () => {
     });
     siteModeMock.mockReturnValue("souls");
     useUnifiedSearchMock.mockReturnValue(defaultUnifiedSearchResult);
+    signInMock.mockReset();
+    signInMock.mockResolvedValue({ signingIn: true });
   });
 
   it("hides Packages navigation in soul mode on mobile and desktop", () => {
@@ -259,6 +262,21 @@ describe("Header", () => {
     expect(fullCopy?.childNodes).toHaveLength(1);
     expect(signInButton.querySelector(".sign-in-with")).toBeNull();
     expect(signInButton.querySelector(".sign-in-compact-copy")?.textContent).toBe("GitHub");
+  });
+
+  it("shows an auth error when the GitHub sign-in request does not start", async () => {
+    const { setAuthError } = await import("../lib/useAuthError");
+    siteModeMock.mockReturnValue("skills");
+    signInMock.mockResolvedValue({ signingIn: false });
+
+    render(<Header />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in with GitHub" }));
+
+    expect(signInMock).toHaveBeenCalledWith("github", { redirectTo: "/" });
+    await waitFor(() => {
+      expect(setAuthError).toHaveBeenCalledWith("Sign in failed. Please try again.");
+    });
   });
 
   it("keeps inline search and moves content nav into the compact menu", () => {

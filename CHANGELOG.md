@@ -10,9 +10,19 @@
 - CLI/API: include skill owner handles in search results so duplicate/common
   slugs are easier to disambiguate (thanks @vyctorbrzezowski).
 - Web: let skill publishers pick a curated lucide icon for cards and listings (#2174) (thanks @momothemage).
+- Dependencies: update production `@clack/prompts`, `tailwind-merge`, and
+  `yaml` dependencies (#2198).
 
 ### Fixes
 
+- API: return `400` for invalid known public package filters and invalid skill
+  list sort values, while continuing to ignore unknown query parameters (#2184).
+- API/docs: document v1 plain-text error responses and expose owner metadata in
+  the OpenAPI search result schema (#2187) (thanks @vyctorbrzezowski).
+- Web: preserve `ownerHandle` through legacy skill publish redirects so org
+  admins land in the correct new-version owner context (#2177).
+- Auth: show a visible error if the GitHub sign-in request fails before the
+  provider redirect starts (#2197).
 - Settings: save display name/bio changes even when a legacy personal publisher
   handle conflict prevents publisher profile sync (#1199).
 - API: return a clear 400 for `/api/v1/packages/search` without a non-empty

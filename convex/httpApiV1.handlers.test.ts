@@ -918,7 +918,6 @@ describe("httpApiV1 handlers", () => {
       ["rating", "stars"],
       ["installs", "installs"],
       ["installs-all-time", "installs"],
-      ["unknown", "updated"],
       ["trending", null],
     ];
 
@@ -943,6 +942,18 @@ describe("httpApiV1 handlers", () => {
       );
       expect(response.status).toBe(200);
     }
+  });
+
+  it("lists skills rejects invalid sort", async () => {
+    const runQuery = vi.fn();
+    const runMutation = vi.fn().mockResolvedValue(okRate());
+    const response = await __handlers.listSkillsV1Handler(
+      makeCtx({ runQuery, runMutation }),
+      new Request("https://example.com/api/v1/skills?sort=unknown"),
+    );
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("Invalid sort query parameter");
+    expect(runQuery).not.toHaveBeenCalled();
   });
 
   it("lists skills forwards nonSuspiciousOnly", async () => {
@@ -3495,6 +3506,30 @@ describe("httpApiV1 handlers", () => {
     );
   });
 
+  it("packages search rejects invalid known filters", async () => {
+    const runQuery = vi.fn();
+    const runMutation = vi.fn().mockResolvedValue(okRate());
+
+    for (const [param, message] of [
+      ["family=bad", "Invalid family query parameter"],
+      ["channel=bad", "Invalid channel query parameter"],
+      ["isOfficial=maybe", "Invalid isOfficial query parameter"],
+      ["executesCode=maybe", "Invalid executesCode query parameter"],
+      ["featured=maybe", "Invalid featured query parameter"],
+      ["artifactKind=bad", "Invalid artifactKind query parameter"],
+      ["requiresBrowser=maybe", "Invalid requiresBrowser query parameter"],
+    ]) {
+      const response = await __handlers.packagesGetRouterV1Handler(
+        makeCtx({ runQuery, runMutation }),
+        new Request(`https://example.com/api/v1/packages/search?q=test&${param}`),
+      );
+      expect(response.status).toBe(400);
+      expect(await response.text()).toBe(message);
+    }
+
+    expect(runQuery).not.toHaveBeenCalled();
+  });
+
   it("packages list supports family=skill on the generic route", async () => {
     const runQuery = vi.fn().mockResolvedValue({ page: [], isDone: true, continueCursor: "" });
     const runMutation = vi.fn().mockResolvedValue(okRate());
@@ -3506,6 +3541,30 @@ describe("httpApiV1 handlers", () => {
 
     expect(response.status).toBe(200);
     expect(runQuery).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        paginationOpts: { cursor: null, numItems: 7 },
+      }),
+    );
+  });
+
+  it("packages list rejects invalid known filters but ignores unknown params", async () => {
+    const runQuery = vi.fn().mockResolvedValue({ page: [], isDone: true, continueCursor: "" });
+    const runMutation = vi.fn().mockResolvedValue(okRate());
+
+    const invalid = await __handlers.listPackagesV1Handler(
+      makeCtx({ runQuery, runMutation }),
+      new Request("https://example.com/api/v1/packages?family=bad"),
+    );
+    expect(invalid.status).toBe(400);
+    expect(await invalid.text()).toBe("Invalid family query parameter");
+
+    const unknown = await __handlers.listPackagesV1Handler(
+      makeCtx({ runQuery, runMutation }),
+      new Request("https://example.com/api/v1/packages?unknown=bad&limit=7"),
+    );
+    expect(unknown.status).toBe(200);
+    expect(runQuery).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.objectContaining({
         paginationOpts: { cursor: null, numItems: 7 },
