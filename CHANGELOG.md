@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixes
+
+- API: fix `GET /api/v1/skills` pagination so `cursor` advances to the next page instead of repeating the first page for supported non-trending sorts (#2275) (thanks @vyctorbrzezowski, @enerj).
+
 ## 0.17.0 - 2026-05-19
 
 - CLI/API: add self-serve org publisher creation with `clawhub publisher create <handle>` and scoped package publish errors that point to the command.
