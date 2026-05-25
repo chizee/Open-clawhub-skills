@@ -99,6 +99,11 @@ import {
 } from "./lib/reservedSlugs";
 import { matchesAllTokens, matchesExploratoryTokenPrefixes, tokenize } from "./lib/searchText";
 import { SKILL_CAPABILITY_TAGS } from "./lib/skillCapabilityTags";
+import {
+  selectGeneratedSkillCardFile,
+  selectSkillCardFile,
+  sourceSkillVersionFiles,
+} from "./lib/skillCards";
 import { normalizeSkillIconValue } from "./lib/skillIcon";
 import {
   fetchText,
@@ -1295,6 +1300,7 @@ function enforceNewSkillRateLimit(signals: OwnerTrustSignals) {
 const HARD_DELETE_PHASES = [
   "versions",
   "fingerprints",
+  "skillCardJobs",
   "embeddings",
   "comments",
   "commentReports",
@@ -1378,6 +1384,21 @@ async function hardDeleteSkillStep(
       }
       if (fingerprints.length === HARD_DELETE_BATCH_SIZE) {
         await scheduleHardDelete(ctx, skill._id, actorUserId, "fingerprints");
+        return;
+      }
+      await scheduleHardDelete(ctx, skill._id, actorUserId, "skillCardJobs");
+      return;
+    }
+    case "skillCardJobs": {
+      const jobs = await ctx.db
+        .query("skillCardGenerationJobs")
+        .withIndex("by_skill", (q) => q.eq("skillId", skill._id))
+        .take(HARD_DELETE_BATCH_SIZE);
+      for (const job of jobs) {
+        await ctx.db.delete(job._id);
+      }
+      if (jobs.length === HARD_DELETE_BATCH_SIZE) {
+        await scheduleHardDelete(ctx, skill._id, actorUserId, "skillCardJobs");
         return;
       }
       await scheduleHardDelete(ctx, skill._id, actorUserId, "embeddings");
@@ -1696,6 +1717,12 @@ type PublicSkillVersion = {
     checkedAt: NonNullable<Doc<"skillVersions">["staticScan"]>["checkedAt"];
   };
   clawScanNote?: string;
+  generatedSkillCard?: {
+    path: string;
+    size: number;
+    sha256: string;
+    contentType?: string;
+  } | null;
 };
 
 type ManagementSkillEntry = {
@@ -1920,6 +1947,35 @@ function toPublicSkillVersion(
   };
 }
 
+function toPublicSkillCardFile(file: Doc<"skillVersions">["files"][number]) {
+  return {
+    path: file.path,
+    size: file.size,
+    sha256: file.sha256,
+    contentType: normalizeTextContentType(file.path, file.contentType),
+  };
+}
+
+async function getGeneratedSkillCardPublicFile(
+  ctx: Pick<QueryCtx, "db">,
+  version: Doc<"skillVersions"> | null,
+) {
+  if (!version) return null;
+  const files = Array.isArray(version.files) ? version.files : [];
+  if (!selectSkillCardFile(files)) return null;
+  const entries = await ctx.db
+    .query("skillVersionFingerprints")
+    .withIndex("by_version_kind", (q) =>
+      q.eq("versionId", version._id).eq("kind", "generated-bundle"),
+    )
+    .collect();
+  const file = await selectGeneratedSkillCardFile(
+    files,
+    entries.map((entry) => entry.fingerprint),
+  );
+  return file ? toPublicSkillCardFile(file) : null;
+}
+
 function toPublicSkillListVersionFromSummary(
   summary: NonNullable<Doc<"skills">["latestVersionSummary"]>,
   latestVersionId: Id<"skillVersions"> | undefined,
@@ -2120,9 +2176,10 @@ export const getBySlug = query({
         : null;
     const isOwner = Boolean(userId && (userId === skill.ownerUserId || membership));
 
-    const latestVersion = toPublicSkillVersion(
-      skill.latestVersionId ? await ctx.db.get(skill.latestVersionId) : null,
-    );
+    const latestVersionDoc = skill.latestVersionId ? await ctx.db.get(skill.latestVersionId) : null;
+    const latestVersion = toPublicSkillVersion(latestVersionDoc);
+    const generatedSkillCard = await getGeneratedSkillCardPublicFile(ctx, latestVersionDoc);
+    if (latestVersion) latestVersion.generatedSkillCard = generatedSkillCard;
     const owner = toPublicPublisher(ownerPublisher);
     if (!owner) return null;
     const badges = await getSkillBadgeMap(ctx, skill._id);
@@ -2447,6 +2504,7 @@ export const getBySlugForStaff = query({
     if (!skill) return null;
 
     const latestVersion = skill.latestVersionId ? await ctx.db.get(skill.latestVersionId) : null;
+    const generatedSkillCard = await getGeneratedSkillCardPublicFile(ctx, latestVersion);
     const ownerPublisher = await getOwnerPublisher(ctx, {
       ownerPublisherId: skill.ownerPublisherId,
       ownerUserId: skill.ownerUserId,
@@ -2497,7 +2555,7 @@ export const getBySlugForStaff = query({
       requestedSlug: resolved.requestedSlug,
       resolvedSlug: resolved.resolvedSlug,
       skill: { ...skill, badges },
-      latestVersion,
+      latestVersion: latestVersion ? { ...latestVersion, generatedSkillCard } : null,
       owner,
       overrideReviewer,
       auditLogs,
@@ -5493,6 +5551,21 @@ export const getVersionBySkillAndVersionInternal = internalQuery({
   },
 });
 
+export const listVersionFingerprintsInternal = internalQuery({
+  args: { skillVersionId: v.id("skillVersions") },
+  handler: async (ctx, args) => {
+    const entries = await ctx.db
+      .query("skillVersionFingerprints")
+      .withIndex("by_version", (q) => q.eq("versionId", args.skillVersionId))
+      .collect();
+    return entries.map((entry) => ({
+      fingerprint: entry.fingerprint,
+      kind: entry.kind,
+      createdAt: entry.createdAt,
+    }));
+  },
+});
+
 export const getSkillByIdInternal = internalQuery({
   args: { skillId: v.id("skills") },
   handler: async (ctx, args) => ctx.db.get(args.skillId),
@@ -6268,6 +6341,10 @@ export const updateSkillVersionStaticScanInternal = internalMutation({
     await ctx.db.patch(version._id, {
       staticScan: args.staticScan,
     });
+    await ctx.scheduler?.runAfter(0, internal.skillCards.enqueueForVersionInternal, {
+      versionId: version._id,
+      source: "scan",
+    });
     const updatedVersion = { ...version, staticScan: args.staticScan };
 
     const skill = await ctx.db.get(args.skillId);
@@ -6331,6 +6408,10 @@ export const updateVersionDepRegistryAnalysisInternal = internalMutation({
     };
 
     await ctx.db.patch(version._id, versionPatch);
+    await ctx.scheduler?.runAfter(0, internal.skillCards.enqueueForVersionInternal, {
+      versionId: version._id,
+      source: "scan",
+    });
     const updatedVersion = { ...version, ...versionPatch };
 
     const skill = await ctx.db.get(version.skillId);
@@ -6360,13 +6441,22 @@ export const scanSkillVersionStaticallyInternal: ReturnType<typeof internalActio
         return { ok: true as const, skipped: "missing" as const };
       }
 
+      const fingerprintEntries = await ctx.runQuery(
+        internal.skills.listVersionFingerprintsInternal,
+        {
+          skillVersionId: version._id,
+        },
+      );
+      const generatedBundleFingerprints = fingerprintEntries
+        .filter((entry) => entry.kind === "generated-bundle")
+        .map((entry) => entry.fingerprint);
       const staticScan = await runStaticPublishScan(ctx, {
         slug: skill.slug,
         displayName: skill.displayName,
         summary: skill.summary ?? undefined,
         frontmatter: version.parsed?.frontmatter ?? {},
         metadata: version.parsed?.metadata,
-        files: version.files,
+        files: sourceSkillVersionFiles(version.files, { generatedBundleFingerprints }),
       });
 
       return await ctx.runMutation(internal.skills.updateSkillVersionStaticScanInternal, {
@@ -7356,6 +7446,10 @@ export const updateVersionLlmAnalysisInternal = internalMutation({
     if (!version) return;
     const nextVersion = { ...version, llmAnalysis: args.llmAnalysis };
     await ctx.db.patch(args.versionId, { llmAnalysis: args.llmAnalysis });
+    await ctx.scheduler?.runAfter(0, internal.skillCards.enqueueForVersionInternal, {
+      versionId: args.versionId,
+      source: "scan",
+    });
     if (args.moderationMode === "preserve") return;
 
     const skill = await ctx.db.get(version.skillId);
@@ -7841,6 +7935,39 @@ export const getReadme: ReturnType<typeof action> = action({
     if (!readmeFile) throw new ConvexError("SKILL.md not found");
     const text = await fetchText(ctx, readmeFile.storageId);
     return { path: readmeFile.path, text };
+  },
+});
+
+export const getSkillCard: ReturnType<typeof action> = action({
+  args: { versionId: v.id("skillVersions") },
+  handler: async (ctx, args): Promise<FileTextResult> => {
+    const version = (await ctx.runQuery(internal.skills.getVersionByIdInternal, {
+      versionId: args.versionId,
+    })) as Doc<"skillVersions"> | null;
+    if (!version) throw new ConvexError("Version not found");
+    if (!(await canReadSkillVersionFiles(ctx, version))) {
+      throw new ConvexError("Version not available");
+    }
+
+    const fingerprintEntries = (await ctx.runQuery(
+      internal.skills.listVersionFingerprintsInternal,
+      {
+        skillVersionId: version._id,
+      },
+    )) as Array<{ fingerprint: string; kind?: "source" | "generated-bundle" }>;
+    const file = await selectGeneratedSkillCardFile(
+      version.files,
+      fingerprintEntries
+        .filter((entry) => entry.kind === "generated-bundle")
+        .map((entry) => entry.fingerprint),
+    );
+    if (!file) throw new ConvexError("Skill Card not found");
+    if (file.size > MAX_DIFF_FILE_BYTES) {
+      throw new ConvexError("File exceeds 200KB limit");
+    }
+
+    const text = await fetchText(ctx, file.storageId);
+    return { path: file.path, text, size: file.size, sha256: file.sha256 };
   },
 });
 
@@ -9391,6 +9518,17 @@ export const insertVersion = internalMutation({
     changelog: v.string(),
     clawScanNote: v.optional(v.string()),
     changelogSource: v.optional(v.union(v.literal("auto"), v.literal("user"))),
+    sourceProvenance: v.optional(
+      v.object({
+        kind: v.literal("github"),
+        url: v.string(),
+        repo: v.string(),
+        ref: v.string(),
+        commit: v.string(),
+        path: v.optional(v.string()),
+        importedAt: v.number(),
+      }),
+    ),
     tags: v.optional(v.array(v.string())),
     fingerprint: v.string(),
     bypassNewSkillRateLimit: v.optional(v.boolean()),
@@ -9908,6 +10046,7 @@ export const insertVersion = internalMutation({
       skillId: skill._id,
       version: args.version,
       fingerprint: args.fingerprint,
+      sourceProvenance: args.sourceProvenance,
       changelog: args.changelog,
       ...(clawScanNote ? { clawScanNote } : {}),
       changelogSource: args.changelogSource,
@@ -10094,6 +10233,7 @@ export const insertVersion = internalMutation({
       skillId: skill._id,
       versionId,
       fingerprint: args.fingerprint,
+      kind: "source",
       createdAt: now,
     });
 
