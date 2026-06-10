@@ -3,6 +3,7 @@ import type { Id } from "./_generated/dataModel";
 import {
   BANNED_REAUTH_MESSAGE,
   DELETED_ACCOUNT_REAUTH_MESSAGE,
+  createGitHubAuthProvider,
   handleDeletedUserSignIn,
 } from "./auth";
 
@@ -137,5 +138,15 @@ describe("handleDeletedUserSignIn", () => {
     await expect(
       handleDeletedUserSignIn(ctx as never, { userId, existingUserId: userId }),
     ).rejects.toThrow(BANNED_REAUTH_MESSAGE);
+  });
+});
+
+describe("GitHub auth provider", () => {
+  it("does not link ClawHub accounts by GitHub profile email", () => {
+    const provider = createGitHubAuthProvider() as {
+      options?: { allowDangerousEmailAccountLinking?: boolean };
+    };
+
+    expect(provider.options?.allowDangerousEmailAccountLinking).toBe(false);
   });
 });
