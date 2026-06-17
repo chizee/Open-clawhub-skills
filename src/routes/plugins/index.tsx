@@ -127,6 +127,23 @@ function normalizeActivePluginSort(sort: LegacyPluginSort | undefined): PluginSo
   return sort;
 }
 
+function hasPluginBrowseFilter(
+  args: Pick<PluginsPageDataRequest, "category" | "featured" | "official">,
+) {
+  return Boolean(args.category || args.featured || args.official);
+}
+
+function getDefaultPluginBrowseSort(
+  args: Pick<PluginsPageDataRequest, "category" | "featured" | "official">,
+): VisiblePluginSort {
+  return hasPluginBrowseFilter(args) ? "installs" : "recommended";
+}
+
+function hasPersistentPluginBrowseFilter(
+  args: Pick<PluginsPageDataRequest, "category" | "official">,
+) {
+  return Boolean(args.category || args.official);
+}
 function isNavigationAbortError(err: unknown, signal?: AbortSignal) {
   if (signal?.aborted) return true;
   return err instanceof Error && err.name === "AbortError";
@@ -147,7 +164,7 @@ export async function loadPluginsPageData(
         args.sort === "updated" ||
         !args.sort ||
         args.sort === "recommended")
-        ? { sort: args.sort ?? "recommended" }
+        ? { sort: args.sort ?? getDefaultPluginBrowseSort(args) }
         : {}),
       limit: PLUGINS_PAGE_SIZE,
       signal: args.signal,
@@ -384,22 +401,25 @@ function PluginsIndex() {
 
   const handleSortChange = (value: string) => {
     const nextSort = parsePluginSort(value);
-    const sort =
-      nextSort === "recommended" ||
-      nextSort === "relevance" ||
-      nextSort === "newest" ||
-      nextSort === "name"
-        ? undefined
-        : nextSort;
 
     void navigate({
-      search: (prev: PluginSearchState) => ({
-        ...prev,
-        cursor: undefined,
-        family: undefined,
-        featured: undefined,
-        sort,
-      }),
+      search: (prev: PluginSearchState) => {
+        const isExplicitFilteredRecommendation =
+          nextSort === "recommended" && !prev.q && hasPersistentPluginBrowseFilter(prev);
+        const sort =
+          isExplicitFilteredRecommendation || nextSort === "installs"
+            ? nextSort
+            : nextSort === "updated"
+              ? "updated"
+              : undefined;
+        return {
+          ...prev,
+          cursor: undefined,
+          family: undefined,
+          featured: undefined,
+          sort,
+        };
+      },
       replace: true,
     });
   };

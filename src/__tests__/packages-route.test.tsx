@@ -741,6 +741,7 @@ describe("plugins route", () => {
     expect(fetchPluginCatalogMock).toHaveBeenCalledWith(
       expect.objectContaining({
         isOfficial: true,
+        sort: "installs",
         limit: 25,
       }),
     );
@@ -773,6 +774,29 @@ describe("plugins route", () => {
       cursor: undefined,
       featured: undefined,
       sort: undefined,
+    });
+  });
+
+  it("keeps recommended explicit when selected from filtered plugin browse", async () => {
+    searchMock = { category: "security" };
+    const route = await loadRoute();
+    const Component = route.__config.component as ComponentType;
+
+    render(<Component />);
+
+    fireEvent.click(screen.getByRole("radio", { name: "Recommended" }));
+
+    const lastCall = navigateMock.mock.calls.at(-1)?.[0] as {
+      replace?: boolean;
+      search: (prev: Record<string, unknown>) => Record<string, unknown>;
+    };
+    expect(lastCall.replace).toBe(true);
+    expect(lastCall.search({ category: "security", cursor: "cursor:current" })).toEqual({
+      category: "security",
+      cursor: undefined,
+      family: undefined,
+      featured: undefined,
+      sort: "recommended",
     });
   });
 

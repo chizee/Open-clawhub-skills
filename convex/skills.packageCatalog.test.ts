@@ -23,7 +23,7 @@ const listPackageCatalogPageHandler = (
     {
       channel?: "official" | "community" | "private";
       isOfficial?: boolean;
-      sort?: "updated" | "downloads" | "recommended" | "installs";
+      sort?: "updated" | "downloads" | "installs" | "recommended";
       paginationOpts: { cursor: string | null; numItems: number };
     },
     {
@@ -104,12 +104,17 @@ function makeDigest(
 function makeCtx(
   pages: Array<{ page: Array<Record<string, unknown>>; isDone: boolean; continueCursor: string }>,
   optionsOrIndexNames:
-    | { indexNames?: string[]; missingRecommendedScores?: boolean }
+    | {
+        firstByIndex?: Record<string, unknown>;
+        indexNames?: string[];
+        missingRecommendedScores?: boolean;
+      }
     | string[] = {},
 ) {
-  const indexNames = Array.isArray(optionsOrIndexNames)
-    ? optionsOrIndexNames
-    : optionsOrIndexNames.indexNames;
+  const options = Array.isArray(optionsOrIndexNames)
+    ? { indexNames: optionsOrIndexNames }
+    : optionsOrIndexNames;
+  const indexNames = options.indexNames;
   const missingRecommendedScores =
     !Array.isArray(optionsOrIndexNames) && optionsOrIndexNames.missingRecommendedScores === true;
   const pageByCursor = new Map<
@@ -159,9 +164,10 @@ function makeCtx(
                   pageByCursor.get(pageCursor) ?? { page: [], isDone: true, continueCursor: "" },
               }),
               first: async () =>
-                missingRecommendedScores && indexName.startsWith("by_active_recommended_")
+                options.firstByIndex?.[indexName] ??
+                (missingRecommendedScores && indexName.startsWith("by_active_recommended_")
                   ? (allDigests[0] ?? {})
-                  : null,
+                  : null),
               unique: async () => null,
             };
           },
@@ -265,6 +271,92 @@ describe("skills package catalog queries", () => {
     ]);
   });
 
+  it("accepts recommended sort and uses the recommendation score index for package catalog rows", async () => {
+    const exportArgs = (listPackageCatalogPage as unknown as { exportArgs: () => string })
+      .exportArgs;
+    const exportedArgs = JSON.parse(exportArgs()) as {
+      value: {
+        sort?: {
+          fieldType?: {
+            value?: Array<{ value?: string }>;
+          };
+        };
+      };
+    };
+    expect(exportedArgs.value.sort?.fieldType?.value?.map((entry) => entry.value)).toContain(
+      "recommended",
+    );
+
+    const indexNames: string[] = [];
+    const result = await listPackageCatalogPageHandler(
+      makeCtx(
+        [
+          {
+            page: [
+              makeDigest("recommended-skill", {
+                recommendedScore: 400,
+                recommendedScoreVersion: 3,
+              }),
+            ],
+            isDone: true,
+            continueCursor: "",
+          },
+        ],
+        { indexNames },
+      ),
+      {
+        sort: "recommended",
+        paginationOpts: { cursor: null, numItems: 10 },
+      },
+    );
+
+    expect(indexNames).toEqual([
+      "by_active_recommended_score",
+      "by_active_recommended_score_version",
+      "by_active_recommended_score_version",
+      "by_active_recommended_score",
+    ]);
+    expect(result.page).toEqual([
+      expect.objectContaining({
+        name: "recommended-skill",
+        family: "skill",
+      }),
+    ]);
+  });
+
+  it("falls back to installs sort for recommended package catalog rows while scores backfill", async () => {
+    const indexNames: string[] = [];
+    const result = await listPackageCatalogPageHandler(
+      makeCtx(
+        [
+          {
+            page: [makeDigest("fallback-skill")],
+            isDone: false,
+            continueCursor: "next-updated-page",
+          },
+        ],
+        {
+          firstByIndex: {
+            by_active_recommended_score_version: { _id: "skillSearchDigest:backfill-needed" },
+          },
+          indexNames,
+        },
+      ),
+      {
+        sort: "recommended",
+        paginationOpts: { cursor: null, numItems: 1 },
+      },
+    );
+
+    expect(indexNames).toEqual([
+      "by_active_recommended_score",
+      "by_active_recommended_score_version",
+      "by_active_stats_installs_all_time",
+    ]);
+    expect(result.page).toEqual([expect.objectContaining({ name: "fallback-skill" })]);
+    expect(result.continueCursor).toContain('"recommendedFallback":"installs"');
+  });
+
   it("uses the recommended score index for recommended package catalog rows", async () => {
     const indexNames: string[] = [];
     const result = await listPackageCatalogPageHandler(
@@ -293,13 +385,13 @@ describe("skills package catalog queries", () => {
     expect(result.page).toEqual([expect.objectContaining({ name: "recommended-skill" })]);
   });
 
-  it("falls recommended package catalog rows back to updated when scores are missing", async () => {
+  it("falls recommended package catalog rows back to installs when scores are missing", async () => {
     const indexNames: string[] = [];
     const result = await listPackageCatalogPageHandler(
       makeCtx(
         [
           {
-            page: [makeDigest("updated-fallback-skill")],
+            page: [makeDigest("install-fallback-skill")],
             isDone: false,
             continueCursor: "updated-next",
           },
@@ -312,9 +404,12 @@ describe("skills package catalog queries", () => {
       },
     );
 
-    expect(indexNames).toEqual(["by_active_recommended_score", "by_active_updated"]);
-    expect(result.page).toEqual([expect.objectContaining({ name: "updated-fallback-skill" })]);
-    expect(result.continueCursor).toContain('"recommendedFallback":"updated"');
+    expect(indexNames).toEqual([
+      "by_active_recommended_score",
+      "by_active_stats_installs_all_time",
+    ]);
+    expect(result.page).toEqual([expect.objectContaining({ name: "install-fallback-skill" })]);
+    expect(result.continueCursor).toContain('"recommendedFallback":"installs"');
   });
 
   it("keeps recommended package catalog cursors on their original index", async () => {
@@ -484,30 +579,5 @@ describe("skills package catalog queries", () => {
     );
 
     expect(result).toEqual([]);
-  });
-
-  it("ignores retired capability filter args in skill package listings", async () => {
-    const result = await listPackageCatalogPageHandler(
-      makeCtx([
-        {
-          page: [makeDigest("paytoll"), makeDigest("weather")],
-          isDone: true,
-          continueCursor: "",
-        },
-      ]),
-      {
-        capabilityTag: "crypto",
-        paginationOpts: { cursor: null, numItems: 10 },
-      } as Parameters<typeof listPackageCatalogPageHandler>[1] & { capabilityTag?: string },
-    );
-
-    expect(result.page).toEqual([
-      expect.objectContaining({
-        name: "paytoll",
-      }),
-      expect.objectContaining({
-        name: "weather",
-      }),
-    ]);
   });
 });
