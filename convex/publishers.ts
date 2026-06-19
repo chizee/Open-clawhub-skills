@@ -8,6 +8,7 @@ import { assertAdmin, getOptionalActiveAuthUserId, requireUser } from "./lib/acc
 import { isPublicSkillDoc } from "./lib/globalStats";
 import { isOfficialPublisher, toPublicPublisherWithOfficial } from "./lib/officialPublishers";
 import { extractPackageDigestFields, upsertPackageSearchDigest } from "./lib/packageSearchDigest";
+import { isPackageBlockedFromPublic } from "./lib/packageSecurity";
 import { toPublicPublisher } from "./lib/public";
 import {
   formatReservedPublicOwnerHandleMessage,
@@ -80,7 +81,10 @@ type PublisherCatalogItem = {
   inferredCategories?: string[];
   latestVersionId?: Id<"skillVersions">;
   inferredFromVersionId?: Id<"skillVersions">;
-  /** Legacy response field retained while older frontend bundles are cached. */
+  /**
+   * Legacy skill icon field or public plugin manifest HTTPS icon URL retained
+   * while older frontend bundles are cached.
+   */
   icon: string | null;
   href: string;
   installs: number;
@@ -402,7 +406,10 @@ function getPublisherCatalogItems(
       displayName: pkg.displayName,
       summary: pkg.summary ?? null,
       topics: pkg.topics,
-      icon: null,
+      icon:
+        pkg.channel === "private" || isPackageBlockedFromPublic(pkg.scanStatus)
+          ? null
+          : (pkg.icon ?? null),
       href: buildPluginDetailHref(pkg.name),
       installs: pkg.stats.installs,
       downloads: pkg.stats.downloads,

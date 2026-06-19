@@ -572,6 +572,7 @@ export function PublishedItemCard({
           <MarketplaceIcon
             kind={item.kind}
             label={item.displayName}
+            imageUrl={item.kind === "plugin" ? item.icon : null}
             icon={item.kind === "skill" ? item.icon : null}
             skill={item.kind === "skill" ? item : null}
             size="md"
@@ -603,6 +604,7 @@ export function PublishedItemCard({
       <MarketplaceIcon
         kind={item.kind}
         label={item.displayName}
+        imageUrl={item.kind === "plugin" ? item.icon : null}
         icon={item.kind === "skill" ? item.icon : null}
         skill={item.kind === "skill" ? item : null}
       />
