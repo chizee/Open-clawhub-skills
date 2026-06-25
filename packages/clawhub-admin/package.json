@@ -22,9 +22,11 @@
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "dev": "node --enable-source-maps dist/clawhub-admin/src/cli.js",
+    "prepack": "npm run build",
     "test": "vitest run -c vitest.config.ts",
+    "test:artifact": "vitest run --configLoader runner -c vitest.artifact.config.ts",
     "typecheck": "node ./scripts/typecheck.mjs",
-    "verify": "bun run test && bun run typecheck && bun run build"
+    "verify": "bun run test && bun run typecheck && bun run test:artifact"
   },
   "dependencies": {
     "@clack/prompts": "1.6.0",
