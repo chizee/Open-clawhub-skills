@@ -508,8 +508,53 @@ jobs:
           INSPECT_LOCAL_ROOT: ${{ steps.resolve_publish.outputs.inspect_local_root }}
         run: |
           set -euo pipefail
-          mkdir -p "$INSPECT_LOCAL_ROOT"
-          tar -xzf "$PREBUILT_PACKAGE_ARTIFACT_PATH" -C "$INSPECT_LOCAL_ROOT" --strip-components=1
+          rm -rf -- "$INSPECT_LOCAL_ROOT"
+          mkdir -p -- "$INSPECT_LOCAL_ROOT"
+          python3 - <<'PY'
+          import copy
+          import os
+          import tarfile
+          from pathlib import Path
+          from pathlib import PurePosixPath
+
+          archive_path = Path(os.environ["PREBUILT_PACKAGE_ARTIFACT_PATH"])
+          destination = Path(os.environ["INSPECT_LOCAL_ROOT"]).resolve()
+          safe_members = []
+
+          with tarfile.open(archive_path, mode="r:gz") as archive:
+              for member in archive.getmembers():
+                  raw_parts = member.name.split("/")
+                  if (
+                      not member.name
+                      or member.name.startswith("/")
+                      or "\x00" in member.name
+                      or any(part == ".." for part in raw_parts)
+                  ):
+                      raise SystemExit(f"Unsafe prebuilt artifact member path: {member.name!r}")
+                  if member.issym() or member.islnk():
+                      raise SystemExit(f"Links are not allowed in prebuilt artifacts: {member.name!r}")
+                  if not member.isdir() and not member.isreg():
+                      raise SystemExit(f"Unsupported prebuilt artifact member: {member.name!r}")
+
+                  stripped_parts = [part for part in raw_parts[1:] if part not in ("", ".")]
+                  if not stripped_parts:
+                      continue
+                  stripped = PurePosixPath(*stripped_parts)
+                  target = (destination.joinpath(*stripped.parts)).resolve()
+                  try:
+                      target.relative_to(destination)
+                  except ValueError as exc:
+                      raise SystemExit(
+                          f"Prebuilt artifact member escapes extraction root: {member.name!r}"
+                      ) from exc
+
+                  safe_member = copy.copy(member)
+                  safe_member.name = str(stripped)
+                  safe_member.linkname = ""
+                  safe_members.append(safe_member)
+
+              archive.extractall(destination, members=safe_members)
+          PY
 
       - name: Checkout publish source for plugin inspector
         if: steps.resolve_publish.outputs.inspect_checkout_repository != ''
