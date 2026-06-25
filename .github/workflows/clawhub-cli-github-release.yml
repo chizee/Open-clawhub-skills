@@ -309,7 +309,21 @@ jobs:
           UPDATE_EXISTING: ${{ inputs.update_existing }}
         run: |
           set -euo pipefail
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          RELEASE_VIEW_ERROR="$(mktemp)"
+          trap 'rm -f "$RELEASE_VIEW_ERROR"' EXIT
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>"$RELEASE_VIEW_ERROR"; then
+            RELEASE_EXISTS=true
+          else
+            RELEASE_VIEW_STATUS=$?
+            if [[ "$RELEASE_VIEW_STATUS" -eq 1 ]] && grep -Eiq '(^|[^0-9])404([^0-9]|$)|release not found' "$RELEASE_VIEW_ERROR"; then
+              RELEASE_EXISTS=false
+            else
+              cat "$RELEASE_VIEW_ERROR" >&2
+              exit "$RELEASE_VIEW_STATUS"
+            fi
+          fi
+
+          if [[ "$RELEASE_EXISTS" == "true" ]]; then
             if [[ "$UPDATE_EXISTING" != "true" ]]; then
               echo "GitHub Release ${RELEASE_TAG} already exists. Rerun with update_existing=true to repair it." >&2
               exit 1

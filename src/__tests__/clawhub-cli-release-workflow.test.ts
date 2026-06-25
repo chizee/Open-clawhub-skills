@@ -26,4 +26,23 @@ describe("ClawHub CLI release workflows", () => {
     expect(githubRelease).toContain("Publish artifact tarball URL does not match npm metadata.");
     expect(githubRelease).toContain("Publish artifact integrity does not match npm metadata.");
   });
+
+  it("does not treat arbitrary gh release view failures as a missing release", () => {
+    const githubRelease = readFileSync(
+      resolve(".github/workflows/clawhub-cli-github-release.yml"),
+      "utf8",
+    );
+
+    expect(githubRelease).toContain("RELEASE_VIEW_STATUS=$?");
+    expect(githubRelease).toContain(
+      `if [[ "$RELEASE_VIEW_STATUS" -eq 1 ]] && grep -Eiq '(^|[^0-9])404([^0-9]|$)|release not found' "$RELEASE_VIEW_ERROR"; then`,
+    );
+    expect(githubRelease).toContain('cat "$RELEASE_VIEW_ERROR" >&2');
+    expect(githubRelease).toContain('exit "$RELEASE_VIEW_STATUS"');
+    expect(githubRelease).toContain("RELEASE_EXISTS=false");
+    expect(githubRelease).toContain('gh release create "$RELEASE_TAG"');
+    expect(githubRelease).not.toContain(
+      'if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then',
+    );
+  });
 });
