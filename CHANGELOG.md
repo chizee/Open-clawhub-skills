@@ -10,6 +10,7 @@
 ### Fixes
 
 - CLI: accept npm 12's package-keyed `npm pack --json` output when building ClawPacks while retaining compatibility with earlier npm array output.
+- Web/API: preserve JSON, SSR, and OG responses through the Convex proxy after the H3 response-wrapper update.
 
 ## 0.23.1 - 2026-06-29
 
