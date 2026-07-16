@@ -1186,6 +1186,14 @@ ${skillSpector}
 Return the required JSON object only.`;
 }
 
+function cachedVirusTotalAnalysis(job: ClaimedJob) {
+  return (
+    (job.target.version as Record<string, unknown> | undefined)?.vtAnalysis ??
+    (job.target.release as Record<string, unknown> | undefined)?.vtAnalysis ??
+    null
+  );
+}
+
 function codexEnv() {
   const env = { ...process.env };
   const codexHome = resolveCodexWorkerHome(process.env, LOCAL_CODEX_HOME);
@@ -1228,12 +1236,14 @@ class CommandFailure extends Error {
 async function runCommand(
   command: string,
   args: string[],
-  options: { cwd: string; input?: string; timeoutMs: number },
+  options: { cwd: string; input?: string; omitEnv?: string[]; timeoutMs: number },
 ) {
   return await new Promise<{ stdout: string; stderr: string }>((resolvePromise, reject) => {
+    const env = codexEnv();
+    for (const name of options.omitEnv ?? []) delete env[name];
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: codexEnv(),
+      env,
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
@@ -1785,8 +1795,22 @@ export async function runClawScan(
 ) {
   const command = process.env.CODEX_SECURITY_SCAN_CLAWSCAN_COMMAND ?? "clawscan";
   const artifactPath = join(workspace, "clawscan-artifact.json");
+  const virusTotalResultPath = join(workspace, "clawscan-virustotal.json");
+  await writeFile(
+    virusTotalResultPath,
+    `${JSON.stringify(cachedVirusTotalAnalysis(job), null, 2)}\n`,
+    "utf8",
+  );
   const target = await resolveClawScanTarget(workspace, job);
-  const args = [target, "--profile", "clawhub", "--output", artifactPath];
+  const args = [
+    target,
+    "--profile",
+    "clawhub",
+    "--scanner-result",
+    `virustotal=${virusTotalResultPath}`,
+    "--output",
+    artifactPath,
+  ];
   onDiagnostic({ args: [command, ...args], artifactPath });
 
   const captureArtifact = async () => {
@@ -1807,6 +1831,7 @@ export async function runClawScan(
   try {
     const output = await runCommand(command, args, {
       cwd: workspace,
+      omitEnv: ["VIRUSTOTAL_API_KEY"],
       timeoutMs: clawScanTimeoutMs(),
     });
     onDiagnostic({

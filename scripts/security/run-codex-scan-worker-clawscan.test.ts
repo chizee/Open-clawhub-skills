@@ -36,6 +36,12 @@ function skillVersionJob(jobId: string): ClaimedJob {
   return {
     job: baseJob,
     target: {
+      version: {
+        vtAnalysis: {
+          status: "completed",
+          source: "cached-skill-version",
+        },
+      },
       files: [
         {
           path: "SKILL.md",
@@ -53,6 +59,7 @@ function claimedJob(input: {
   source: string;
   target: ClaimedJob["target"];
   targetKind: ClaimedJob["job"]["targetKind"];
+  vtAnalysis?: unknown;
 }): ClaimedJob {
   const leaseField = `lease${"Token"}`;
   const job = {
@@ -65,7 +72,12 @@ function claimedJob(input: {
   } as ClaimedJob["job"];
   return {
     job,
-    target: input.target,
+    target: {
+      ...input.target,
+      ...(input.targetKind === "packageRelease"
+        ? { release: { vtAnalysis: input.vtAnalysis ?? null } }
+        : { version: { vtAnalysis: input.vtAnalysis ?? null } }),
+    },
   };
 }
 
@@ -346,13 +358,22 @@ JSON`,
       const workspace = await tempDir();
       const fakeClawScan = join(workspace, "fake-clawscan");
       const argsLog = join(workspace, "clawscan-args.log");
+      const virusTotalLog = join(workspace, "virustotal-input.json");
       const artifactJson = clawScanArtifactJson({ verdict });
       await writeFakeClawScanCommand(
         fakeClawScan,
-        `printf '%s\n' "$@" > ${JSON.stringify(argsLog)}
+        `if [[ -n "\${VIRUSTOTAL_API_KEY:-}" ]]; then
+  echo "VirusTotal key leaked into ClawScan" >&2
+  exit 86
+fi
+printf '%s\n' "$@" > ${JSON.stringify(argsLog)}
 out=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --scanner-result)
+      cp "\${2#virustotal=}" ${JSON.stringify(virusTotalLog)}
+      shift 2
+      ;;
     --output)
       out="$2"
       shift 2
@@ -369,7 +390,9 @@ JSON`,
       );
 
       const previousCommand = process.env.CODEX_SECURITY_SCAN_CLAWSCAN_COMMAND;
+      const previousVirusTotalKey = process.env.VIRUSTOTAL_API_KEY;
       process.env.CODEX_SECURITY_SCAN_CLAWSCAN_COMMAND = fakeClawScan;
+      process.env.VIRUSTOTAL_API_KEY = "vt-fixture-that-must-not-reach-clawscan";
       try {
         const client = {
           action: vi.fn(async (..._args: unknown[]) => ({})),
@@ -409,10 +432,20 @@ JSON`,
         expect(invocationArgs).toContain("--profile");
         expect(invocationArgs).toContain("clawhub");
         expect(invocationArgs).not.toContain("--context");
-        expect(invocationArgs).not.toContain("--scanner-result");
+        expect(invocationArgs).toContain("--scanner-result");
+        const invocationLines = invocationArgs.trim().split("\n");
+        const scannerResultIndex = invocationLines.indexOf("--scanner-result");
+        const scannerResult = invocationLines[scannerResultIndex + 1];
+        expect(scannerResult).toMatch(/^virustotal=/);
+        expect(JSON.parse(await readFile(virusTotalLog, "utf8"))).toEqual({
+          status: "completed",
+          source: "cached-skill-version",
+        });
       } finally {
         if (previousCommand === undefined) delete process.env.CODEX_SECURITY_SCAN_CLAWSCAN_COMMAND;
         else process.env.CODEX_SECURITY_SCAN_CLAWSCAN_COMMAND = previousCommand;
+        if (previousVirusTotalKey === undefined) delete process.env.VIRUSTOTAL_API_KEY;
+        else process.env.VIRUSTOTAL_API_KEY = previousVirusTotalKey;
       }
     },
   );
@@ -473,6 +506,7 @@ JSON`,
       const fakeClawScan = join(workspace, "fake-clawscan");
       const argsLog = join(workspace, "clawscan-args.log");
       const filesLog = join(workspace, "clawscan-files.log");
+      const virusTotalLog = join(workspace, "virustotal-input.json");
       await writeFakeClawScanCommand(
         fakeClawScan,
         `target="$1"
@@ -481,6 +515,10 @@ find "$target" -type f -print | sort > ${JSON.stringify(filesLog)}
 out=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --scanner-result)
+      cp "\${2#virustotal=}" ${JSON.stringify(virusTotalLog)}
+      shift 2
+      ;;
     --output)
       out="$2"
       shift 2
@@ -511,6 +549,10 @@ JSON`,
               source,
               target: await target(),
               targetKind,
+              vtAnalysis: {
+                status: "completed",
+                source: `${targetKind}-${source}`,
+              },
             }),
             undefined,
             "clawscan",
@@ -540,7 +582,14 @@ JSON`,
           expect.arrayContaining(["--profile", "clawhub", "--output"]),
         );
         expect(invocationArgs).not.toContain("--context");
-        expect(invocationArgs).not.toContain("--scanner-result");
+        const scannerResultIndex = invocationArgs.indexOf("--scanner-result");
+        expect(scannerResultIndex).toBeGreaterThan(-1);
+        const scannerResult = invocationArgs[scannerResultIndex + 1];
+        expect(scannerResult).toMatch(/^virustotal=/);
+        expect(JSON.parse(await readFile(virusTotalLog, "utf8"))).toEqual({
+          status: "completed",
+          source: `${targetKind}-${source}`,
+        });
         expect((await readFile(filesLog, "utf8")).trim().split("\n")).toContain(expectedFile);
       } finally {
         if (previousCommand === undefined) delete process.env.CODEX_SECURITY_SCAN_CLAWSCAN_COMMAND;
@@ -548,6 +597,72 @@ JSON`,
       }
     },
   );
+
+  it("passes a completed null VirusTotal fixture when cached telemetry is unavailable", async () => {
+    const workspace = await tempDir();
+    const fakeClawScan = join(workspace, "fake-clawscan");
+    const argsLog = join(workspace, "clawscan-args.log");
+    const virusTotalLog = join(workspace, "virustotal-input.json");
+    await writeFakeClawScanCommand(
+      fakeClawScan,
+      `printf '%s\n' "$@" > ${JSON.stringify(argsLog)}
+out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --scanner-result)
+      cp "\${2#virustotal=}" ${JSON.stringify(virusTotalLog)}
+      shift 2
+      ;;
+    --output)
+      out="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+mkdir -p "$(dirname "$out")"
+cat > "$out" <<'JSON'
+${clawScanArtifactJson()}
+JSON`,
+    );
+
+    const previousCommand = process.env.CODEX_SECURITY_SCAN_CLAWSCAN_COMMAND;
+    process.env.CODEX_SECURITY_SCAN_CLAWSCAN_COMMAND = fakeClawScan;
+    try {
+      const client = {
+        action: vi.fn(async (..._args: unknown[]) => ({})),
+      };
+      const result = await withFakeLegacySecondary(async () =>
+        processJob(
+          client,
+          "worker-auth",
+          claimedJob({
+            jobId: "securityScanJobs:no-cached-vt",
+            source: "manual",
+            target: fileTarget("SKILL.md", "# Uploaded skill\n"),
+            targetKind: "skillScanRequest",
+          }),
+          undefined,
+          "clawscan",
+        ),
+      );
+
+      expect(result).toEqual({
+        completed: true,
+        hardFailed: false,
+        retryableFailed: false,
+      });
+      const invocationArgs = (await readFile(argsLog, "utf8")).trim().split("\n");
+      const scannerResult = invocationArgs[invocationArgs.indexOf("--scanner-result") + 1];
+      expect(scannerResult).toMatch(/^virustotal=/);
+      expect(JSON.parse(await readFile(virusTotalLog, "utf8"))).toBeNull();
+    } finally {
+      if (previousCommand === undefined) delete process.env.CODEX_SECURITY_SCAN_CLAWSCAN_COMMAND;
+      else process.env.CODEX_SECURITY_SCAN_CLAWSCAN_COMMAND = previousCommand;
+    }
+  });
 
   it.each([
     {
