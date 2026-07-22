@@ -81,6 +81,7 @@ import {
   text,
   toOptionalNumber,
 } from "./shared";
+import { parseSkillsShCatalogReference } from "./skillsShCatalogV1";
 
 const MAX_EXPORT_FILE_COUNT = 10_000;
 const MAX_EXPORT_PAGE_LIMIT = 250;
@@ -1828,6 +1829,16 @@ export async function skillsGetRouterV1Handler(ctx: ActionCtx, request: Request)
 
   if (second === "install" && segments.length === 2) {
     const installUrl = new URL(request.url);
+    if (installUrl.searchParams.has("reference")) {
+      const reference = installUrl.searchParams.get("reference") ?? "";
+      const catalogRef = parseSkillsShCatalogReference(reference);
+      if (!catalogRef || catalogRef.slug !== slug) {
+        return text("Invalid skills.sh reference", 400, rate.headers);
+      }
+      const entry = await ctx.runQuery(api.skillsShCatalog.getPublicEntry, catalogRef);
+      if (!entry) return text("Skill not found", 404, rate.headers);
+      return json(entry.install, 200, rate.headers);
+    }
     const forceInstall = parseBooleanQueryParam(installUrl.searchParams.get("forceInstall"));
     const skill = (await runQueryRef<
       | (InstallResolverSkill & {
@@ -2269,6 +2280,72 @@ export async function skillsGetRouterV1Handler(ctx: ActionCtx, request: Request)
     const versionParam = verifyUrl.searchParams.get("version")?.trim();
     const tagParam = verifyUrl.searchParams.get("tag")?.trim();
     if (versionParam && tagParam) return text("Use either version or tag", 400, rate.headers);
+    if (verifyUrl.searchParams.has("reference")) {
+      const reference = verifyUrl.searchParams.get("reference") ?? "";
+      const catalogRef = parseSkillsShCatalogReference(reference);
+      if (!catalogRef || catalogRef.slug !== slug || versionParam || tagParam) {
+        return text("Invalid skills.sh reference", 400, rate.headers);
+      }
+      const entry = await ctx.runQuery(api.skillsShCatalog.getPublicEntry, catalogRef);
+      if (!entry?.artifact) return text("Skill not found", 404, rate.headers);
+      const securityPassed = entry.security.verdict === "clean";
+      const reasons = securityPassed ? [] : ["security.status_not_clean"];
+      return json(
+        {
+          schema: "clawhub.skill.verify.v1",
+          ok: securityPassed,
+          decision: securityPassed ? "pass" : "fail",
+          reasons,
+          slug: entry.ref,
+          displayName: entry.displayName,
+          pageUrl: `${publicApiOrigin(request)}${entry.route}`,
+          publisherHandle: null,
+          publisherDisplayName: null,
+          publisherProfileUrl: null,
+          version: entry.githubCommit,
+          resolvedFrom: "latest",
+          tag: null,
+          createdAt: entry.security.scannedAt,
+          card: {
+            available: false,
+            path: "skill-card.md",
+            url: null,
+            sha256: null,
+            size: null,
+            contentType: null,
+          },
+          artifact: {
+            sourceFingerprint: entry.githubContentHash,
+            bundleFingerprints: [entry.artifact.contentHash],
+            files: entry.artifact.files,
+          },
+          provenance: {
+            source: "skills-sh-catalog",
+            reference: entry.ref,
+            repository: entry.repository,
+            path: entry.githubPath,
+            commit: entry.githubCommit,
+            contentHash: entry.githubContentHash,
+            scanAttemptId: entry.security.attemptId,
+            artifactContentHash: entry.artifact.contentHash,
+          },
+          security: {
+            status: entry.security.verdict,
+            passed: securityPassed,
+            rawStatus: entry.security.verdict,
+            verdict: entry.security.verdict,
+            source: entry.security.source,
+            attemptId: entry.security.attemptId,
+            checkedAt: entry.security.scannedAt,
+          },
+          signature: {
+            status: "unsigned",
+          },
+        },
+        200,
+        rate.headers,
+      );
+    }
 
     const skillResult = (await runQueryRef<GetBySlugResult>(
       ctx,
