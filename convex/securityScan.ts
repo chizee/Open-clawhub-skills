@@ -9,6 +9,10 @@ import { Events, logEvent } from "./lib/observabilityEvents";
 import { normalizePackageName } from "./lib/packageRegistry";
 import { normalizePackageScanStatus } from "./lib/packageSecurity";
 import { assertCanManageOwnedResource } from "./lib/publishers";
+import {
+  getRuntimeRolloutCapabilities,
+  isLegacyNvidiaSkillSource,
+} from "./lib/rolloutCapabilities";
 import { sourceSkillVersionFiles } from "./lib/skillCards";
 import {
   getSkillBySlugForPublisher,
@@ -60,6 +64,24 @@ const SKILL_SCAN_ASYNC_NOTE = "Scans are asynchronous and may take time to compl
 
 const finalLlmAnalysisStatuses = new Set(["clean", "suspicious", "malicious"]);
 const artifactBackedLlmAnalysisStatuses = new Set(["clean", "benign", "suspicious", "malicious"]);
+
+async function isGitHubSkillScanAllowed(
+  ctx: Pick<MutationCtx, "db">,
+  githubSourceId: Id<"githubSkillSources">,
+) {
+  if (getRuntimeRolloutCapabilities().githubSkillSync.runtimeEnabled) return true;
+  const source = await ctx.db.get(githubSourceId);
+  return Boolean(source && isLegacyNvidiaSkillSource(source.repo));
+}
+
+async function assertGitHubSkillScanAllowed(
+  ctx: Pick<MutationCtx, "db">,
+  githubSourceId: Id<"githubSkillSources">,
+) {
+  if (!(await isGitHubSkillScanAllowed(ctx, githubSourceId))) {
+    throw new ConvexError("GitHub Skill Sync rollout is disabled");
+  }
+}
 
 type CancelSkipReason =
   | "not-queued"
@@ -352,6 +374,7 @@ const internalRefs = internal as unknown as {
     getCodexScanQueueHealthInternal: unknown;
     getSkillScanRequestForUserInternal: unknown;
     getJobTargetInternal: unknown;
+    listReadySourceJobsForClaimInternal: unknown;
     recordGitHubSkillScanResultInternal: unknown;
     completeCatalogSkillScanJobInternal: unknown;
     recordSkillScanRequestFailedInternal: unknown;
@@ -818,6 +841,7 @@ async function requestSkillRescanForActor(
     ) {
       throw new ConvexError("GitHub-backed skill content is not available");
     }
+    await assertGitHubSkillScanAllowed(ctx, args.skill.githubSourceId);
     const now = Date.now();
     const { scan, activeJob, actionPending } = await getGitHubSkillScanState(
       ctx,
@@ -1262,10 +1286,19 @@ async function enqueueSkillScanRequestJob(
 ) {
   const request = await ctx.db.get(requestId);
   if (!request) throw new ConvexError("Scan request not found");
+  let rolloutGate: "github-skill-sync" | undefined;
+  if (request.sourceKind === "github" && request.githubSkillScanId) {
+    const scan = await ctx.db.get(request.githubSkillScanId);
+    const source = scan ? await ctx.db.get(scan.githubSourceId) : null;
+    if (source && !isLegacyNvidiaSkillSource(source.repo)) {
+      rolloutGate = "github-skill-sync";
+    }
+  }
   const now = Date.now();
   const jobId = await ctx.db.insert("securityScanJobs", {
     targetKind: "skillScanRequest",
     skillScanRequestId: request._id,
+    rolloutGate,
     status: "queued",
     source: options?.source ?? "manual",
     priority: options?.priority ?? 100,
@@ -1342,6 +1375,9 @@ export const prepareGitHubSkillScanRequestInternal = internalMutation({
       skill.githubCurrentContentHash !== args.contentHash
     ) {
       return { ok: true as const, skipped: "stale-or-missing" as const };
+    }
+    if (!(await isGitHubSkillScanAllowed(ctx, skill.githubSourceId))) {
+      return { ok: true as const, skipped: "rollout-disabled" as const };
     }
     const existing = await ctx.db
       .query("githubSkillScans")
@@ -1477,6 +1513,7 @@ export const appendGitHubSkillScanRequestFilesInternal = internalMutation({
     if (!scan || scan.status !== "pending" || scan.skillScanRequestId !== request._id) {
       throw new ConvexError("GitHub scan request is no longer current");
     }
+    await assertGitHubSkillScanAllowed(ctx, scan.githubSourceId);
     const existing = await ctx.db
       .query("skillScanRequestFileChunks")
       .withIndex("by_skill_scan_request_id_and_chunk_index", (q) =>
@@ -1522,6 +1559,11 @@ export const finalizeGitHubSkillScanRequestInternal = internalMutation({
     if (!request || request.sourceKind !== "github" || !request.githubSkillScanId) {
       throw new ConvexError("GitHub scan request not found");
     }
+    const scan = await ctx.db.get(request.githubSkillScanId);
+    if (!scan) {
+      throw new ConvexError("GitHub scan request is no longer current");
+    }
+    await assertGitHubSkillScanAllowed(ctx, scan.githubSourceId);
     if (request.securityScanJobId) {
       const job = await ctx.db.get(request.securityScanJobId);
       if (job && (job.status === "queued" || job.status === "running")) {
@@ -1535,7 +1577,6 @@ export const finalizeGitHubSkillScanRequestInternal = internalMutation({
       }
       throw new ConvexError("GitHub scan request was already finalized");
     }
-    const scan = await ctx.db.get(request.githubSkillScanId);
     const skill = scan ? await ctx.db.get(scan.skillId) : null;
     if (
       !scan ||
@@ -2696,6 +2737,47 @@ export const clearQueuedBackfillJobsForLocalDev = internalMutation({
   },
 });
 
+type ReadySourceJobsForClaimPage = {
+  page: Doc<"securityScanJobs">[];
+  isDone: boolean;
+  continueCursor: string;
+};
+
+export async function listReadySourceJobsForClaimHandler(
+  ctx: QueryCtx,
+  args: {
+    source: SecurityScanJobSource;
+    now: number;
+    cursor: string | null;
+    numItems: number;
+    excludeGitHubSkillSync: boolean;
+  },
+): Promise<ReadySourceJobsForClaimPage> {
+  const query = ctx.db
+    .query("securityScanJobs")
+    .withIndex("by_status_source_next_run_at", (q) =>
+      q.eq("status", "queued").eq("source", args.source).lte("nextRunAt", args.now),
+    );
+  const eligibleQuery = args.excludeGitHubSkillSync
+    ? query.filter((q) => q.neq(q.field("rolloutGate"), "github-skill-sync"))
+    : query;
+  return await eligibleQuery.order("asc").paginate({
+    cursor: args.cursor,
+    numItems: args.numItems,
+  });
+}
+
+export const listReadySourceJobsForClaimInternal = internalQuery({
+  args: {
+    source: jobSourceValidator,
+    now: v.number(),
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.number(),
+    excludeGitHubSkillSync: v.boolean(),
+  },
+  handler: listReadySourceJobsForClaimHandler,
+});
+
 export const claimQueuedJobsInternal = internalMutation({
   args: {
     workerId: v.string(),
@@ -2746,6 +2828,20 @@ export const claimQueuedJobsInternal = internalMutation({
         ready.push(job);
       }
     };
+    const githubSkillSyncEnabled = getRuntimeRolloutCapabilities().githubSkillSync.runtimeEnabled;
+    const isJobRolloutClaimable = async (job: Doc<"securityScanJobs">) => {
+      if (
+        githubSkillSyncEnabled ||
+        job.targetKind !== "skillScanRequest" ||
+        !job.skillScanRequestId
+      ) {
+        return true;
+      }
+      const request = await ctx.db.get(job.skillScanRequestId);
+      if (request?.sourceKind !== "github" || !request.githubSkillScanId) return true;
+      const scan = await ctx.db.get(request.githubSkillScanId);
+      return scan ? await isGitHubSkillScanAllowed(ctx, scan.githubSourceId) : false;
+    };
     const takeReadySourceJobs = async (source: SecurityScanJobSource) => {
       if (remainingCapacity() === 0) return [];
       let takeLimit = remainingCapacity();
@@ -2764,13 +2860,29 @@ export const claimQueuedJobsInternal = internalMutation({
         // or canceled jobs cannot hide later runnable backlog after the cap is lowered.
         takeLimit = MAX_CODEX_SCAN_CLAIM_LIMIT;
       }
-      return await ctx.db
-        .query("securityScanJobs")
-        .withIndex("by_status_source_next_run_at", (q) =>
-          q.eq("status", "queued").eq("source", source).lte("nextRunAt", now),
-        )
-        .order("asc")
-        .take(takeLimit);
+      const eligible: Doc<"securityScanJobs">[] = [];
+      let cursor: string | null = null;
+      do {
+        const page: ReadySourceJobsForClaimPage = await runQueryRef<ReadySourceJobsForClaimPage>(
+          ctx,
+          internalRefs.securityScan.listReadySourceJobsForClaimInternal,
+          {
+            source,
+            now,
+            cursor,
+            numItems: githubSkillSyncEnabled
+              ? Math.min(takeLimit, MAX_CODEX_SCAN_CLAIM_LIMIT)
+              : MAX_CODEX_SCAN_CLAIM_LIMIT,
+            excludeGitHubSkillSync: !githubSkillSyncEnabled,
+          },
+        );
+        for (const job of page.page) {
+          if (await isJobRolloutClaimable(job)) eligible.push(job);
+          if (eligible.length >= takeLimit) return eligible;
+        }
+        cursor = page.isDone ? null : page.continueCursor;
+      } while (cursor);
+      return eligible;
     };
 
     if (args.lane === "catalog") {
@@ -2801,8 +2913,18 @@ export const claimQueuedJobsInternal = internalMutation({
 
     const claimed = [];
     let catalogClaims = 0;
-    for (const job of ready) {
+    for (const selectedJob of ready) {
       if (claimed.length >= capacity) break;
+      const job = await ctx.db.get(selectedJob._id);
+      if (
+        !job ||
+        job.status !== "queued" ||
+        job.source !== selectedJob.source ||
+        job.nextRunAt > now
+      ) {
+        continue;
+      }
+      if (!(await isJobRolloutClaimable(job))) continue;
       let catalogAttemptId: Id<"skillsShCatalogScanAttempts"> | null = null;
       if (job.source === "skills-sh-catalog-test") {
         if (!job.skillScanRequestId) {
